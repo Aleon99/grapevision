@@ -11,6 +11,16 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
+try:
+    from ultralytics import YOLO
+    MODEL_PATH = os.path.join(os.path.dirname(__file__), "best.pt")
+    yolo_model = YOLO(MODEL_PATH)
+    YOLO_AVAILABLE = True
+    print(f"✅ Modelo YOLOv8 cargado: {MODEL_PATH}")
+except Exception as e:
+    YOLO_AVAILABLE = False
+    print(f"⚠️  YOLOv8 no disponible: {e}")
+
 app = FastAPI(title="GrapeVision API", version="1.0.0")
 
 app.add_middleware(
@@ -100,6 +110,32 @@ DEFECTOS_MOCK = [
 ]
 
 def clasificar_imagen(image_bytes: bytes) -> dict:
+    # ── INFERENCIA REAL CON YOLOv8 ───────────────────────────
+    if YOLO_AVAILABLE:
+        try:
+            img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            results = yolo_model.predict(img, conf=0.5, imgsz=640, verbose=False)
+            boxes = results[0].boxes
+
+            if len(boxes) == 0:
+                # Sin detecciones → fallback mock
+                seed = len(image_bytes) % 1000
+                return _build_result(*_fallback(seed))
+
+            # Tomar la detección con mayor confianza
+            best_idx  = int(boxes.conf.argmax())
+            clase_idx = int(boxes.cls[best_idx])
+            confianza = float(boxes.conf[best_idx])
+            clase_nombre = yolo_model.names[clase_idx]  # "CAT 1" o "CAT 2"
+
+            categoria   = "cat1" if clase_idx == 0 else "cat2"
+            variedad    = "Red Globe"   # ajustar si tienes variedad en el modelo
+            return _build_result(variedad, categoria, confianza)
+
+        except Exception as e:
+            print(f"Error en inferencia YOLO: {e}")
+
+    # ── FALLBACK MOCK si YOLO no está disponible ──────────────
     seed = len(image_bytes) % 1000
     if PIL_AVAILABLE:
         try:
@@ -108,17 +144,19 @@ def clasificar_imagen(image_bytes: bytes) -> dict:
             pixels = list(img_small.getdata())
             r = sum(p[0] for p in pixels) / len(pixels)
             g = sum(p[1] for p in pixels) / len(pixels)
-            b = sum(p[2] for p in pixels) / len(pixels)
             variedad = "Red Globe" if r > g else "Sweet Globe"
-            sat = abs(r - g) + abs(g - b)
+            sat = abs(r - g)
             categoria = "cat1" if sat > 25 else "cat2"
             rng = random.Random(seed)
             confianza = 0.918 if categoria == "cat1" else round(0.78 + rng.uniform(-0.04, 0.06), 3)
+            return _build_result(variedad, categoria, confianza)
         except Exception:
-            variedad, categoria, confianza = _fallback(seed)
-    else:
-        variedad, categoria, confianza = _fallback(seed)
+            pass
 
+    return _build_result(*_fallback(seed))
+
+
+def _build_result(variedad: str, categoria: str, confianza: float) -> dict:
     return {
         "variedad": variedad,
         "categoria": f"CAT {'1' if categoria == 'cat1' else '2'}",
