@@ -2,10 +2,13 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import asyncio, sqlite3, io, json, random, os, base64
+import asyncio, io, json, random, os, base64
+from datetime import datetime
+from dotenv import load_dotenv
+load_dotenv()
 
 try:
-    from PIL import Image
+    from PIL import Image, ImageOps
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -28,52 +31,77 @@ except Exception as e:
     YOLO_AVAILABLE = False
     print(f"⚠️  YOLOv8 no disponible: {e}")
 
-app = FastAPI(title="GrapeVision API", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+# ── SUPABASE (PostgreSQL) ─────────────────────────────────────────────────────
+import psycopg2
+from psycopg2.extras import RealDictCursor
 
-DB_PATH = os.environ.get("DB_PATH", "grapevision.db")
+DATABASE_URL = os.environ.get("DATABASE_URL")  # se configura en Cloud Run
 
-# ── DB ────────────────────────────────────────────────────────────────────────
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
     return conn
 
 def init_db():
     conn = get_db()
-    conn.executescript("""
+    cur  = conn.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS lotes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            lote_id TEXT NOT NULL, fundo TEXT NOT NULL, variedad TEXT NOT NULL,
-            campana TEXT NOT NULL, fecha TEXT NOT NULL, perfil TEXT DEFAULT 'operario',
-            created_at TEXT DEFAULT (datetime('now'))
+            id         SERIAL PRIMARY KEY,
+            lote_id    TEXT NOT NULL,
+            fundo      TEXT NOT NULL,
+            variedad   TEXT NOT NULL,
+            campana    TEXT NOT NULL,
+            fecha      TEXT NOT NULL,
+            perfil     TEXT DEFAULT 'operario',
+            created_at TIMESTAMP DEFAULT NOW()
         );
+
         CREATE TABLE IF NOT EXISTS clasificaciones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            lote_id TEXT NOT NULL, variedad TEXT, categoria TEXT NOT NULL,
-            confianza REAL NOT NULL, criterios TEXT, aprobado_exportacion INTEGER DEFAULT 0,
-            imagen_nombre TEXT, perfil TEXT DEFAULT 'operario',
-            created_at TEXT DEFAULT (datetime('now'))
+            id                   SERIAL PRIMARY KEY,
+            lote_id              TEXT NOT NULL,
+            variedad             TEXT,
+            categoria            TEXT NOT NULL,
+            confianza            REAL NOT NULL,
+            criterios            TEXT,
+            aprobado_exportacion INTEGER DEFAULT 0,
+            imagen_nombre        TEXT,
+            perfil               TEXT DEFAULT 'operario',
+            created_at           TIMESTAMP DEFAULT NOW()
         );
+
         CREATE TABLE IF NOT EXISTS validaciones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            lote_id TEXT NOT NULL, categoria_modelo TEXT NOT NULL,
-            categoria_packing TEXT NOT NULL, coincidencia INTEGER DEFAULT 0,
-            defectos TEXT, created_at TEXT DEFAULT (datetime('now'))
+            id                SERIAL PRIMARY KEY,
+            lote_id           TEXT NOT NULL,
+            categoria_modelo  TEXT NOT NULL,
+            es_correcta       BOOLEAN NOT NULL,
+            observacion       TEXT,
+            created_at        TIMESTAMP DEFAULT NOW()
         );
     """)
-    conn.commit(); conn.close()
+    conn.commit()
+    cur.close()
+    conn.close()
 
-init_db()
+try:
+    init_db()
+    print("✅ Supabase conectado y tablas listas")
+except Exception as e:
+    print(f"⚠️  Error conectando a Supabase: {e}")
+
+# ── APP ───────────────────────────────────────────────────────────────────────
+app = FastAPI(title="GrapeVision API", version="1.0.0")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 # ── PYDANTIC ──────────────────────────────────────────────────────────────────
 class LoteIn(BaseModel):
     lote_id: str; fundo: str; variedad: str; campana: str; fecha: str
     perfil: Optional[str] = "operario"
 
-class ValidacionIn(BaseModel):
-    lote_id: str; categoria_modelo: str; categoria_packing: str
-    defectos: Optional[list] = []
+class FeedbackIn(BaseModel):
+    lote_id: str
+    categoria_modelo: str
+    es_correcta: bool
+    observacion: Optional[str] = ""
 
 # ── CONSTANTES ────────────────────────────────────────────────────────────────
 CRITERIOS = {
@@ -98,13 +126,11 @@ BOX_COLORS = {"cat1":(46,125,79), "cat2":(39,104,208)}
 def dibujar_box(image_bytes: bytes, boxes_data: list, categoria: str, confianza: float):
     if not CV2_AVAILABLE: return None
     try:
-        # Leer con PIL respetando EXIF, luego convertir a array OpenCV
-        from PIL import ImageOps
         img_pil_cv = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes)))
         img = cv2.cvtColor(np.array(img_pil_cv), cv2.COLOR_RGB2BGR)
         if img is None: return None
         h, w  = img.shape[:2]
-        color = BOX_COLORS.get(categoria, (46,125,79))
+        color = BOX_COLORS.get(categoria,(46,125,79))
         label = f"{'CAT 1' if categoria=='cat1' else 'CAT 2'}  {confianza*100:.1f}%"
 
         for box in boxes_data:
@@ -118,7 +144,7 @@ def dibujar_box(image_bytes: bytes, boxes_data: list, categoria: str, confianza:
                 cv2.line(img,pts[0],pts[1],color,t)
             font = cv2.FONT_HERSHEY_DUPLEX
             fs   = 3.5
-            (tw,th),_ = cv2.getTextSize(label,font,fs,3)
+            (tw,th),_ = cv2.getTextSize(label,font,fs,9)
             lx,ly = x1, max(y1-8, th+8)
             cv2.rectangle(img,(lx,ly-th-5),(lx+tw+8,ly+3),color,-1)
             cv2.putText(img,label,(lx+4,ly),font,fs,(255,255,255),9)
@@ -139,7 +165,7 @@ def dibujar_box(image_bytes: bytes, boxes_data: list, categoria: str, confianza:
 def dibujar_box_sintetico(image_bytes: bytes, categoria: str, confianza: float):
     if not CV2_AVAILABLE or not PIL_AVAILABLE: return None
     try:
-        img_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img_pil = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB")
         w,h = img_pil.size
         px,py = int(w*0.08), int(h*0.05)
         buf = io.BytesIO(); img_pil.save(buf,format="JPEG")
@@ -150,11 +176,7 @@ def dibujar_box_sintetico(image_bytes: bytes, categoria: str, confianza: float):
 def clasificar_imagen(image_bytes: bytes) -> dict:
     if YOLO_AVAILABLE:
         try:
-            img_pil = Image.open(io.BytesIO(image_bytes))
-            # Corregir rotación EXIF
-            from PIL import ImageOps
-            img_pil = ImageOps.exif_transpose(img_pil)
-            img_pil = img_pil.convert("RGB")
+            img_pil = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB")
             results = yolo_model.predict(img_pil, conf=0.25, imgsz=640, verbose=False)
             boxes_r = results[0].boxes
             if len(boxes_r) > 0:
@@ -165,16 +187,15 @@ def clasificar_imagen(image_bytes: bytes) -> dict:
                 all_boxes = boxes_r.xyxy.cpu().numpy().tolist()
                 imagen_anotada = dibujar_box(image_bytes, all_boxes, categoria, confianza)
                 return _build_result("Timpson", categoria, confianza, imagen_anotada)
-            print("YOLOv8: sin detecciones, usando fallback")
+            print("YOLOv8: sin detecciones")
         except Exception as e:
             print(f"Error YOLO: {e}")
 
-    # fallback mock
     seed = len(image_bytes) % 1000
     categoria = "cat1"; confianza = 0.918
     if PIL_AVAILABLE:
         try:
-            img = Image.open(io.BytesIO(image_bytes)).convert("RGB").resize((32,32))
+            img = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB").resize((32,32))
             pixels = list(img.getdata())
             r = sum(p[0] for p in pixels)/len(pixels)
             g = sum(p[1] for p in pixels)/len(pixels)
@@ -204,19 +225,22 @@ def _build_result(variedad, categoria, confianza, imagen_anotada=None):
 # ── ENDPOINTS ─────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    return {"status":"ok","yolo":YOLO_AVAILABLE,"opencv":CV2_AVAILABLE,"db":DB_PATH}
+    return {"status":"ok","yolo":YOLO_AVAILABLE,"opencv":CV2_AVAILABLE}
 
 @app.post("/lotes", status_code=201)
 def crear_lote(data: LoteIn):
-    conn = get_db()
-    cur  = conn.execute("INSERT INTO lotes (lote_id,fundo,variedad,campana,fecha,perfil) VALUES (?,?,?,?,?,?)",
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("INSERT INTO lotes (lote_id,fundo,variedad,campana,fecha,perfil) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
         (data.lote_id,data.fundo,data.variedad,data.campana,data.fecha,data.perfil))
-    conn.commit(); id=cur.lastrowid; conn.close()
-    return {"id":id,"lote_id":data.lote_id,"message":"Lote registrado"}
+    row_id = cur.fetchone()["id"]
+    conn.commit(); cur.close(); conn.close()
+    return {"id":row_id,"lote_id":data.lote_id,"message":"Lote registrado"}
 
 @app.get("/lotes")
 def listar_lotes():
-    conn=get_db(); rows=conn.execute("SELECT * FROM lotes ORDER BY created_at DESC").fetchall(); conn.close()
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT * FROM lotes ORDER BY created_at DESC")
+    rows = cur.fetchall(); cur.close(); conn.close()
     return [dict(r) for r in rows]
 
 @app.post("/predict")
@@ -228,40 +252,56 @@ async def predict(file: UploadFile = File(...)):
 @app.post("/clasificaciones", status_code=201)
 def guardar_clasificacion(lote_id:str, variedad:str, categoria:str, confianza:float,
     criterios:str="[]", aprobado:int=0, imagen_nombre:str="", perfil:str="operario"):
-    conn=get_db()
-    cur=conn.execute("INSERT INTO clasificaciones (lote_id,variedad,categoria,confianza,criterios,aprobado_exportacion,imagen_nombre,perfil) VALUES (?,?,?,?,?,?,?,?)",
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""INSERT INTO clasificaciones
+        (lote_id,variedad,categoria,confianza,criterios,aprobado_exportacion,imagen_nombre,perfil)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
         (lote_id,variedad,categoria,confianza,criterios,aprobado,imagen_nombre,perfil))
-    conn.commit(); id=cur.lastrowid; conn.close()
-    return {"id":id,"message":"Clasificación guardada"}
+    row_id = cur.fetchone()["id"]
+    conn.commit(); cur.close(); conn.close()
+    return {"id":row_id,"message":"Clasificación guardada"}
 
 @app.get("/clasificaciones")
 def listar_clasificaciones(limit:int=50):
-    conn=get_db()
-    rows=conn.execute("SELECT * FROM clasificaciones ORDER BY created_at DESC LIMIT ?",(limit,)).fetchall()
-    conn.close()
-    result=[]
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT * FROM clasificaciones ORDER BY created_at DESC LIMIT %s",(limit,))
+    rows = cur.fetchall(); cur.close(); conn.close()
+    result = []
     for r in rows:
-        d=dict(r)
-        try: d["criterios"]=json.loads(d["criterios"] or "[]")
-        except: d["criterios"]=[]
+        d = dict(r)
+        try: d["criterios"] = json.loads(d["criterios"] or "[]")
+        except: d["criterios"] = []
         result.append(d)
     return result
 
-@app.post("/validaciones", status_code=201)
-def guardar_validacion(data: ValidacionIn):
-    coincidencia=1 if data.categoria_modelo==data.categoria_packing else 0
-    conn=get_db()
-    cur=conn.execute("INSERT INTO validaciones (lote_id,categoria_modelo,categoria_packing,coincidencia,defectos) VALUES (?,?,?,?,?)",
-        (data.lote_id,data.categoria_modelo,data.categoria_packing,coincidencia,json.dumps(data.defectos)))
-    conn.commit(); id=cur.lastrowid; conn.close()
-    return {"id":id,"coincidencia":bool(coincidencia),"message":"Validación registrada"}
+# ── FEEDBACK SUPERVISOR (nuevo) ───────────────────────────────────────────────
+@app.post("/validaciones/feedback", status_code=201)
+def guardar_feedback(data: FeedbackIn):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""INSERT INTO validaciones
+        (lote_id, categoria_modelo, es_correcta, observacion)
+        VALUES (%s,%s,%s,%s) RETURNING id""",
+        (data.lote_id, data.categoria_modelo, data.es_correcta, data.observacion))
+    row_id = cur.fetchone()["id"]
+    conn.commit(); cur.close(); conn.close()
+    return {"id":row_id,"message":"Feedback registrado"}
 
 @app.get("/validaciones/stats")
 def stats_validaciones():
-    conn=get_db()
-    total=conn.execute("SELECT COUNT(*) as n FROM validaciones").fetchone()["n"]
-    coincidencias=conn.execute("SELECT COUNT(*) as n FROM validaciones WHERE coincidencia=1").fetchone()["n"]
-    conn.close()
-    discrepancias=total-coincidencias
-    precision=round((coincidencias/total*100),1) if total>0 else 0
-    return {"total":total,"coincidencias":coincidencias,"discrepancias":discrepancias,"precision_pct":precision}
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) as total FROM validaciones")
+    total = cur.fetchone()["total"]
+    cur.execute("SELECT COUNT(*) as correctas FROM validaciones WHERE es_correcta=true")
+    correctas = cur.fetchone()["correctas"]
+    cur.close(); conn.close()
+    incorrectas = total - correctas
+    precision   = round((correctas/total*100),1) if total>0 else 0
+    return {"total":total,"correctas":correctas,
+            "incorrectas":incorrectas,"precision_pct":precision}
+
+@app.get("/validaciones")
+def listar_validaciones(limit:int=50):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT * FROM validaciones ORDER BY created_at DESC LIMIT %s",(limit,))
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return [dict(r) for r in rows]
