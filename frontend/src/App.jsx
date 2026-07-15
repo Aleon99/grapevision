@@ -541,8 +541,8 @@ function HistorialSupervisor() {
                   </span>
                 </span>
                 <span style={{ fontSize:12, color:S.gris2 }}>
-                  {new Date(r.created_at).toLocaleDateString("es-PE")}<br/>
-                  {new Date(r.created_at).toLocaleTimeString("es-PE",{hour:"2-digit",minute:"2-digit"})}
+                  {new Date(r.created_at + "Z").toLocaleDateString("es-PE")}<br/>
+                  {new Date(r.created_at + "Z").toLocaleTimeString("es-PE",{hour:"2-digit",minute:"2-digit"})}
                 </span>
               </div>
             ))}
@@ -900,8 +900,8 @@ export default function App() {
             lote:      r.lote_id,
             categoria: r.categoria,
             confianza: `${(r.confianza*100).toFixed(1)} %`,
-            fecha:     new Date(r.created_at).toLocaleDateString("es-PE") + " " +
-                       new Date(r.created_at).toLocaleTimeString("es-PE",{hour:"2-digit",minute:"2-digit"}),
+            fecha:     new Date(r.created_at + "Z").toLocaleDateString("es-PE") + " " +
+                       new Date(r.created_at + "Z").toLocaleTimeString("es-PE",{hour:"2-digit",minute:"2-digit"}),
             tipo:      r.aprobado_exportacion ? "cat1" : "cat2",
           })));
         }
