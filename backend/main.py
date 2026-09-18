@@ -2,7 +2,7 @@ from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import asyncio, io, json, random, os, base64
+import io, json, random, os, base64
 from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()

@@ -78,7 +78,7 @@ npm run dev
 
 | Variable    | Descripción                   | Default              |
 |-------------|-------------------------------|----------------------|
-| DB_PATH     | Ruta del archivo SQLite       | grapevision.db       |
+| DATABASE_URL| Cadena de conexión PostgreSQL (Supabase) | — (requerida) |
 | VITE_API_URL| URL del backend desde React   | http://localhost:8000|
 
 ---
