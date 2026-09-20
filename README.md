@@ -92,6 +92,7 @@ npm run dev
 | POST   | /predict             | Clasificar imagen (mock YOLO)  |
 | POST   | /clasificaciones     | Guardar resultado              |
 | GET    | /clasificaciones     | Listar historial               |
+| GET    | /clasificaciones/stats | Estadísticas CAT1/CAT2       |
 | POST   | /validaciones        | Registrar validación supervisor|
 | GET    | /validaciones/stats  | Estadísticas de precisión      |
 | GET    | /health              | Health check                   |

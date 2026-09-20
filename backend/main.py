@@ -1,4 +1,4 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
@@ -71,12 +71,16 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS validaciones (
             id                SERIAL PRIMARY KEY,
-            lote_id           TEXT NOT NULL,
+            lote_id           TEXT,
             categoria_modelo  TEXT NOT NULL,
             es_correcta       BOOLEAN NOT NULL,
             observacion       TEXT,
             created_at        TIMESTAMP DEFAULT NOW()
         );
+
+        ALTER TABLE clasificaciones ADD COLUMN IF NOT EXISTS fecha_inspeccion TEXT;
+        ALTER TABLE validaciones ALTER COLUMN lote_id DROP NOT NULL;
+        ALTER TABLE validaciones ADD COLUMN IF NOT EXISTS confianza REAL;
     """)
     conn.commit()
     cur.close()
@@ -98,10 +102,11 @@ class LoteIn(BaseModel):
     perfil: Optional[str] = "operario"
 
 class FeedbackIn(BaseModel):
-    lote_id: str
+    lote_id: Optional[str] = None
     categoria_modelo: str
     es_correcta: bool
     observacion: Optional[str] = ""
+    confianza: Optional[float] = None
 
 # ── CONSTANTES ────────────────────────────────────────────────────────────────
 CRITERIOS = {
@@ -120,7 +125,27 @@ DEFECTOS = {
         {"nombre":"Raste severo",      "estado":"No detectado","color":"#2E7D4F"},
     ],
 }
-BOX_COLORS = {"cat1":(46,125,79), "cat2":(39,104,208)}
+BOX_COLORS = {"cat1":(46,125,79), "cat2":(39,104,208), "indeterminado":(117,117,117)}
+
+# ── VALIDACIÓN DE IMAGEN (HU003) ────────────────────────────────────────────────
+FORMATOS_PERMITIDOS = {"image/jpeg", "image/png"}
+TAMANO_MAXIMO_MB = 10
+CONFIANZA_MINIMA = 0.5
+
+# ── MONITOREO DE PRECISIÓN (HU014) ──────────────────────────────────────────────
+VENTANA_RECIENTE = 20
+UMBRAL_DESVIACION_PCT = 10
+
+def validar_imagen(contents: bytes, content_type: str):
+    if content_type not in FORMATOS_PERMITIDOS:
+        raise HTTPException(400, f"Formato no permitido ({content_type or 'desconocido'}). Usa JPG o PNG.")
+    if len(contents) > TAMANO_MAXIMO_MB * 1024 * 1024:
+        raise HTTPException(400, f"La imagen supera el tamaño máximo de {TAMANO_MAXIMO_MB}MB.")
+    if PIL_AVAILABLE:
+        try:
+            Image.open(io.BytesIO(contents)).verify()
+        except Exception:
+            raise HTTPException(400, "El archivo no es una imagen válida o está corrupto.")
 
 # ── DIBUJAR BOX ───────────────────────────────────────────────────────────────
 def dibujar_box(image_bytes: bytes, boxes_data: list, categoria: str, confianza: float):
@@ -131,7 +156,8 @@ def dibujar_box(image_bytes: bytes, boxes_data: list, categoria: str, confianza:
         if img is None: return None
         h, w  = img.shape[:2]
         color = BOX_COLORS.get(categoria,(46,125,79))
-        label = f"{'CAT 1' if categoria=='cat1' else 'CAT 2'}  {confianza*100:.1f}%"
+        cat_txt = {"cat1":"CAT 1","cat2":"CAT 2"}.get(categoria, "INDETERMINADO")
+        label = f"{cat_txt}  {confianza*100:.1f}%"
 
         for box in boxes_data:
             x1,y1,x2,y2 = int(box[0]),int(box[1]),int(box[2]),int(box[3])
@@ -183,13 +209,21 @@ def clasificar_imagen(image_bytes: bytes) -> dict:
                 best_idx  = int(boxes_r.conf.argmax())
                 clase_idx = int(boxes_r.cls[best_idx])
                 confianza = float(boxes_r.conf[best_idx])
-                categoria = "cat1" if clase_idx == 0 else "cat2"
                 all_boxes = boxes_r.xyxy.cpu().numpy().tolist()
+
+                if confianza < CONFIANZA_MINIMA:
+                    imagen_anotada = dibujar_box(image_bytes, all_boxes, "indeterminado", confianza)
+                    return _build_result_indeterminado(confianza, imagen_anotada)
+
+                categoria = "cat1" if clase_idx == 0 else "cat2"
                 imagen_anotada = dibujar_box(image_bytes, all_boxes, categoria, confianza)
                 return _build_result("Timpson", categoria, confianza, imagen_anotada)
+
             print("YOLOv8: sin detecciones")
+            return _build_result_indeterminado()
         except Exception as e:
             print(f"Error YOLO: {e}")
+            return _build_result_indeterminado()
 
     seed = len(image_bytes) % 1000
     categoria = "cat1"; confianza = 0.918
@@ -222,6 +256,23 @@ def _build_result(variedad, categoria, confianza, imagen_anotada=None):
         "imagen_anotada": imagen_anotada,
     }
 
+def _build_result_indeterminado(confianza=None, imagen_anotada=None):
+    return {
+        "variedad": "Timpson",
+        "categoria": "INDETERMINADO",
+        "categoria_label": "No determinado",
+        "categoria_key": "indeterminado",
+        "confianza": round(confianza,3) if confianza is not None else None,
+        "confianza_pct": f"{round(confianza*100,1)} %" if confianza is not None else "—",
+        "criterios_cumplidos": [],
+        "aprobado_exportacion": False,
+        "defectos": [],
+        "norma": "Codex Alimentarius / NTP 011.012",
+        "imagen_anotada": imagen_anotada,
+        "indeterminado": True,
+        "mensaje": "No se pudo determinar la categoría con suficiente confianza. Vuelve a intentarlo o usa otra imagen.",
+    }
+
 # ── ENDPOINTS ─────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
@@ -246,17 +297,18 @@ def listar_lotes():
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     contents = await file.read()
+    validar_imagen(contents, file.content_type)
     resultado = clasificar_imagen(contents)
     return {"success":True,"archivo":file.filename,"resultado":resultado}
 
 @app.post("/clasificaciones", status_code=201)
 def guardar_clasificacion(lote_id:str, variedad:str, categoria:str, confianza:float,
-    criterios:str="[]", aprobado:int=0, imagen_nombre:str="", perfil:str="operario"):
+    criterios:str="[]", aprobado:int=0, imagen_nombre:str="", perfil:str="operario", fecha_inspeccion:str=""):
     conn = get_db(); cur = conn.cursor()
     cur.execute("""INSERT INTO clasificaciones
-        (lote_id,variedad,categoria,confianza,criterios,aprobado_exportacion,imagen_nombre,perfil)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-        (lote_id,variedad,categoria,confianza,criterios,aprobado,imagen_nombre,perfil))
+        (lote_id,variedad,categoria,confianza,criterios,aprobado_exportacion,imagen_nombre,perfil,fecha_inspeccion)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+        (lote_id,variedad,categoria,confianza,criterios,aprobado,imagen_nombre,perfil,fecha_inspeccion))
     row_id = cur.fetchone()["id"]
     conn.commit(); cur.close(); conn.close()
     return {"id":row_id,"message":"Clasificación guardada"}
@@ -264,7 +316,7 @@ def guardar_clasificacion(lote_id:str, variedad:str, categoria:str, confianza:fl
 @app.get("/clasificaciones")
 def listar_clasificaciones(limit:int=50):
     conn = get_db(); cur = conn.cursor()
-    cur.execute("SELECT * FROM clasificaciones ORDER BY created_at DESC LIMIT %s",(limit,))
+    cur.execute("SELECT * FROM clasificaciones WHERE perfil='operario' ORDER BY created_at DESC LIMIT %s",(limit,))
     rows = cur.fetchall(); cur.close(); conn.close()
     result = []
     for r in rows:
@@ -274,14 +326,30 @@ def listar_clasificaciones(limit:int=50):
         result.append(d)
     return result
 
+@app.get("/clasificaciones/stats")
+def stats_clasificaciones():
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) as total FROM clasificaciones WHERE perfil='operario'")
+    total = cur.fetchone()["total"]
+    cur.execute("SELECT COUNT(*) as cat1 FROM clasificaciones WHERE perfil='operario' AND aprobado_exportacion=1")
+    cat1 = cur.fetchone()["cat1"]
+    cur.close(); conn.close()
+
+    cat2 = total - cat1
+    cat1_pct = round((cat1/total*100),1) if total>0 else 0
+    cat2_pct = round((cat2/total*100),1) if total>0 else 0
+
+    return {"total":total,"cat1":cat1,"cat2":cat2,
+            "cat1_pct":cat1_pct,"cat2_pct":cat2_pct}
+
 # ── FEEDBACK SUPERVISOR (nuevo) ───────────────────────────────────────────────
 @app.post("/validaciones/feedback", status_code=201)
 def guardar_feedback(data: FeedbackIn):
     conn = get_db(); cur = conn.cursor()
     cur.execute("""INSERT INTO validaciones
-        (lote_id, categoria_modelo, es_correcta, observacion)
-        VALUES (%s,%s,%s,%s) RETURNING id""",
-        (data.lote_id, data.categoria_modelo, data.es_correcta, data.observacion))
+        (lote_id, categoria_modelo, es_correcta, observacion, confianza)
+        VALUES (%s,%s,%s,%s,%s) RETURNING id""",
+        (data.lote_id, data.categoria_modelo, data.es_correcta, data.observacion, data.confianza))
     row_id = cur.fetchone()["id"]
     conn.commit(); cur.close(); conn.close()
     return {"id":row_id,"message":"Feedback registrado"}
@@ -293,11 +361,21 @@ def stats_validaciones():
     total = cur.fetchone()["total"]
     cur.execute("SELECT COUNT(*) as correctas FROM validaciones WHERE es_correcta=true")
     correctas = cur.fetchone()["correctas"]
+    cur.execute("SELECT es_correcta FROM validaciones ORDER BY created_at DESC LIMIT %s", (VENTANA_RECIENTE,))
+    recientes = cur.fetchall()
     cur.close(); conn.close()
+
     incorrectas = total - correctas
     precision   = round((correctas/total*100),1) if total>0 else 0
+
+    total_reciente     = len(recientes)
+    correctas_reciente = sum(1 for r in recientes if r["es_correcta"])
+    precision_reciente = round((correctas_reciente/total_reciente*100),1) if total_reciente>0 else 0
+    desviacion = total_reciente>0 and (precision - precision_reciente) >= UMBRAL_DESVIACION_PCT
+
     return {"total":total,"correctas":correctas,
-            "incorrectas":incorrectas,"precision_pct":precision}
+            "incorrectas":incorrectas,"precision_pct":precision,
+            "precision_reciente_pct":precision_reciente,"desviacion":desviacion}
 
 @app.get("/validaciones")
 def listar_validaciones(limit:int=50):

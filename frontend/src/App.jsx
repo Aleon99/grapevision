@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recharts";
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
@@ -79,7 +80,7 @@ function TopNav({ title, showBack, onBack, role, onNav, navActive }) {
       {role && (
         <div style={{ maxWidth:720, margin:"0 auto", display:"flex",
           borderTop:"1px solid rgba(255,255,255,0.15)" }}>
-          {[{key:"inicio",label:"Inicio"},{key:"historial",label:"Historial"},{key:"perfil",label:"Perfil"}].map(t => (
+          {[{key:"inicio",label:"Inicio"},{key:"historial",label:"Historial"},{key:"dashboard",label:"Dashboard"},{key:"perfil",label:"Perfil"}].map(t => (
             <button key={t.key} onClick={() => onNav(t.key)}
               style={{ flex:1, height:44, background:"none", border:"none",
                 cursor:"pointer", fontSize:13, fontWeight:600,
@@ -139,10 +140,12 @@ function RoleSelect({ onSelect }) {
   );
 }
 
+const VARIEDAD_UNICA = "Timpson";
+
 function RegistroLote({ onGuardar }) {
   const [data, setData] = useState({
-    fundo:"La Esperanza", lote:"L-2026-015",
-    variedad:"Timpson", campana:"2026", fecha:"2026-06-05"
+    fundo:"La Esperanza", lote:"",
+    variedad:VARIEDAD_UNICA, campana:"2026", fecha:fechaHoy()
   });
   const [saved, setSaved]     = useState(false);
   const [loading, setLoading] = useState(false);
@@ -164,7 +167,6 @@ function RegistroLote({ onGuardar }) {
   const fields = [
     { label:"Fundo",    key:"fundo",    type:"select", opts:["La Esperanza","Fundo Norte","Fundo Sur"] },
     { label:"Lote",     key:"lote",     type:"text" },
-    { label:"Variedad", key:"variedad", type:"select", opts:["Timpson","Red Globe"] },
     { label:"Campaña",  key:"campana",  type:"text" },
     { label:"Fecha de inspección", key:"fecha", type:"date" },
   ];
@@ -210,16 +212,78 @@ function RegistroLote({ onGuardar }) {
   );
 }
 
-function CapturaImagen({ loteId, onEnviar }) {
+const FORMATOS_PERMITIDOS = ["image/jpeg", "image/png"];
+const TAMANO_MAXIMO_MB = 10;
+
+function validarArchivo(f) {
+  if (!FORMATOS_PERMITIDOS.includes(f.type)) {
+    return `Formato no permitido (${f.type || "desconocido"}). Usa JPG o PNG.`;
+  }
+  if (f.size > TAMANO_MAXIMO_MB * 1024 * 1024) {
+    return `La imagen supera el máximo de ${TAMANO_MAXIMO_MB}MB.`;
+  }
+  return null;
+}
+
+function TarjetaIndeterminado({ resultado, onReintentar, onOtraImagen }) {
+  return (
+    <>
+      {resultado.imagen_anotada && (
+        <div style={{ borderRadius:12, overflow:"hidden", border:`1px solid ${S.borde}` }}>
+          <img src={resultado.imagen_anotada} alt="indeterminado"
+            style={{ width:"100%", maxHeight:380, objectFit:"contain", display:"block" }}/>
+        </div>
+      )}
+      <div style={{ background:S.ambar, borderRadius:8, padding:"14px 16px" }}>
+        <div style={{ fontWeight:700, color:S.ambarTxt, marginBottom:4 }}>⚠ No se pudo determinar la categoría</div>
+        <div style={{ fontSize:13, color:S.ambarTxt }}>{resultado.mensaje}</div>
+      </div>
+      <button onClick={onReintentar} style={btn()}>🔄 Reintentar con esta imagen</button>
+      <button onClick={onOtraImagen}
+        style={{ ...btn(), background:S.blanco, color:S.verdeOsc, border:`1.5px solid ${S.verdeOsc}` }}>
+        📷 Elegir otra imagen
+      </button>
+    </>
+  );
+}
+
+function fechaHoy() { return new Date().toISOString().slice(0,10); }
+
+function CapturaImagen({ loteInicial, onEnviar, onNuevoLote }) {
+  const [lotes,        setLotes]        = useState([]);
+  const [cargandoLotes,setCargandoLotes]= useState(true);
+  const [loteId,       setLoteId]       = useState(loteInicial?.lote || "");
+  const [fecha,        setFecha]        = useState(fechaHoy());
   const [preview,    setPreview]    = useState(null);
   const [file,       setFile]       = useState(null);
   const [meta,       setMeta]       = useState(null);
   const [loading,    setLoading]    = useState(false);
   const [imgAnotada, setImgAnotada] = useState(null);
+  const [error,      setError]      = useState(null);
+  const [indeterminado, setIndeterminado] = useState(null);
   const fileRef = useRef();
+
+  useEffect(() => {
+    fetch(`${API}/lotes`)
+      .then(r => r.json())
+      .then(rows => {
+        const lista = Array.isArray(rows) ? rows : [];
+        setLotes(lista);
+        setCargandoLotes(false);
+        setLoteId(actual => actual || (lista[0]?.lote_id || ""));
+      })
+      .catch(() => setCargandoLotes(false));
+  }, []);
+
+  useEffect(() => {
+    if (loteInicial?.lote) setLoteId(loteInicial.lote);
+  }, [loteInicial]);
 
   const handleFile = (f) => {
     if (!f) return;
+    setError(null); setIndeterminado(null);
+    const err = validarArchivo(f);
+    if (err) { setError(err); setFile(null); setPreview(null); setMeta(null); return; }
     setFile(f); setImgAnotada(null);
     setMeta({ tipo:f.type.split("/")[1]?.toUpperCase()||"JPG", tam:`${(f.size/1024/1024).toFixed(1)} MB` });
     const reader = new FileReader();
@@ -229,11 +293,17 @@ function CapturaImagen({ loteId, onEnviar }) {
 
   const handleEnviar = async () => {
     if (!file) return;
-    setLoading(true);
+    setLoading(true); setError(null); setIndeterminado(null);
     let resultado = null;
     try {
       const fd = new FormData(); fd.append("file", file);
       const res  = await fetch(`${API}/predict`, { method:"POST", body:fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        setError(err?.detail || "No se pudo procesar la imagen.");
+        setLoading(false);
+        return;
+      }
       const data = await res.json();
       resultado  = data.resultado;
     } catch(_) {}
@@ -251,14 +321,23 @@ function CapturaImagen({ loteId, onEnviar }) {
         imagen_anotada:null,
       };
     }
+    if (resultado.indeterminado) {
+      setIndeterminado(resultado);
+      setLoading(false);
+      return;
+    }
     if (resultado.imagen_anotada) {
       setImgAnotada(resultado.imagen_anotada);
       setLoading(false);
-      setTimeout(() => onEnviar(resultado), 1500);
+      setTimeout(() => onEnviar(resultado, loteId, fecha), 1500);
     } else {
       setLoading(false);
-      onEnviar(resultado);
+      onEnviar(resultado, loteId, fecha);
     }
+  };
+
+  const otraImagen = () => {
+    setIndeterminado(null); setFile(null); setPreview(null); setMeta(null); setError(null);
   };
 
   const checks = meta ? [
@@ -271,74 +350,107 @@ function CapturaImagen({ loteId, onEnviar }) {
     <div style={pageWrap}>
       <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Captura de Imagen</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-        <div style={{ background:S.exito, borderRadius:8, padding:"10px 14px",
-          color:S.verdeOsc, fontSize:13, fontWeight:500 }}>
-          Lote asociado: {loteId}
+        <div>
+          <Label required>Lote</Label>
+          <div style={{ display:"flex", gap:8, marginTop:6 }}>
+            <select value={loteId} onChange={e => setLoteId(e.target.value)}
+              disabled={cargandoLotes || lotes.length===0}
+              style={{ ...input, flex:1, appearance:"none" }}>
+              {lotes.length===0 && <option value="">{cargandoLotes ? "Cargando lotes..." : "Sin lotes registrados"}</option>}
+              {lotes.map(l => <option key={l.id} value={l.lote_id}>{l.lote_id} · {l.fundo}</option>)}
+            </select>
+            <button onClick={onNuevoLote} style={{ height:48, padding:"0 16px", borderRadius:8,
+              border:`1.5px solid ${S.verdeOsc}`, background:S.blanco, color:S.verdeOsc,
+              fontWeight:600, fontSize:13, cursor:"pointer", whiteSpace:"nowrap" }}>
+              + Nuevo
+            </button>
+          </div>
         </div>
-        {loading ? (
-          <Spinner texto="Analizando con YOLOv8..." />
+        <div>
+          <Label required>Fecha de inspección</Label>
+          <input type="date" value={fecha} onChange={e => setFecha(e.target.value)} style={{ ...input, marginTop:6 }}/>
+        </div>
+        {!cargandoLotes && lotes.length===0 && (
+          <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
+            ℹ Aún no tienes lotes registrados. Toca "+ Nuevo" para registrar el primero antes de clasificar.
+          </div>
+        )}
+        {error && (
+          <div style={{ background:"#FFEBEE", borderRadius:8, padding:"10px 14px", color:"#C62828", fontSize:13, fontWeight:500 }}>
+            ⚠ {error}
+          </div>
+        )}
+        {indeterminado ? (
+          <TarjetaIndeterminado resultado={indeterminado} onReintentar={handleEnviar} onOtraImagen={otraImagen}/>
         ) : (
-          <div onDrop={e => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); }}
-            onDragOver={e => e.preventDefault()}
-            onClick={() => !preview && fileRef.current.click()}
-            style={{ width:"100%", borderRadius:12, overflow:"hidden",
-              border:`2px dashed ${S.verdeOsc}`, background:"#f9f9f9",
-              cursor: preview ? "default" : "pointer",
-              display:"flex", alignItems:"center", justifyContent:"center", minHeight:280 }}>
-            {imgAnotada
-              ? <img src={imgAnotada} alt="anotada" style={{ width:"100%", maxHeight:440, objectFit:"contain", display:"block" }}/>
-              : preview
-                ? <img src={preview} alt="preview" style={{ width:"100%", maxHeight:440, objectFit:"cover", display:"block" }}/>
-                : <div style={{ textAlign:"center", color:S.gris3, fontSize:15, padding:40 }}>
-                    <div style={{ fontSize:48, marginBottom:12 }}>📷</div>
-                    <div>Arrastra una imagen aquí</div>
-                    <div style={{ fontSize:13, marginTop:6 }}>o haz clic para seleccionar</div>
-                  </div>
-            }
-          </div>
-        )}
-        <input ref={fileRef} type="file" accept="image/*" style={{ display:"none" }}
-          onChange={e => handleFile(e.target.files[0])}/>
-        {!loading && !imgAnotada && (
-          <button onClick={() => fileRef.current.click()}
-            style={{ ...btn(), background:S.blanco, color:S.verdeOsc, border:`1.5px solid ${S.verdeOsc}` }}>
-            📷 Seleccionar imagen del racimo
-          </button>
-        )}
-        {checks.map((c,i) => (
-          <div key={i} style={{ display:"flex", alignItems:"center", gap:10, fontSize:13 }}>
-            <div style={{ width:18, height:18, borderRadius:"50%", background:S.exito,
-              display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
-              <svg width={10} height={10} viewBox="0 0 24 24" fill="none">
-                <path d="M4 12.5L9 17.5L20 6.5" stroke={S.verdeOsc} strokeWidth={2.5}
-                  strokeLinecap="round" strokeLinejoin="round"/>
-              </svg>
-            </div>
-            <span style={{ color:S.gris2 }}>{c.label}</span>
-          </div>
-        ))}
-        {!loading && !imgAnotada && (
-          <button onClick={handleEnviar} disabled={!preview} style={btn({ opacity:!preview ? 0.5 : 1 })}>
-            🔍 Enviar a clasificación
-          </button>
-        )}
-        {imgAnotada && (
-          <div style={{ background:S.infoFondo, borderRadius:8, padding:"10px 14px", fontSize:13, color:S.infoTxt }}>
-            ✓ Detección completada — redirigiendo al resultado...
-          </div>
+          <>
+            {loading ? (
+              <Spinner texto="Analizando con YOLOv8..." />
+            ) : (
+              <div onDrop={e => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); }}
+                onDragOver={e => e.preventDefault()}
+                onClick={() => !preview && fileRef.current.click()}
+                style={{ width:"100%", borderRadius:12, overflow:"hidden",
+                  border:`2px dashed ${S.verdeOsc}`, background:"#f9f9f9",
+                  cursor: preview ? "default" : "pointer",
+                  display:"flex", alignItems:"center", justifyContent:"center", minHeight:280 }}>
+                {imgAnotada
+                  ? <img src={imgAnotada} alt="anotada" style={{ width:"100%", maxHeight:440, objectFit:"contain", display:"block" }}/>
+                  : preview
+                    ? <img src={preview} alt="preview" style={{ width:"100%", maxHeight:440, objectFit:"cover", display:"block" }}/>
+                    : <div style={{ textAlign:"center", color:S.gris3, fontSize:15, padding:40 }}>
+                        <div style={{ fontSize:48, marginBottom:12 }}>📷</div>
+                        <div>Arrastra una imagen aquí</div>
+                        <div style={{ fontSize:13, marginTop:6 }}>o haz clic para seleccionar (JPG/PNG, máx. {TAMANO_MAXIMO_MB}MB)</div>
+                      </div>
+                }
+              </div>
+            )}
+            <input ref={fileRef} type="file" accept="image/jpeg,image/png" style={{ display:"none" }}
+              onChange={e => handleFile(e.target.files[0])}/>
+            {!loading && !imgAnotada && (
+              <button onClick={() => fileRef.current.click()}
+                style={{ ...btn(), background:S.blanco, color:S.verdeOsc, border:`1.5px solid ${S.verdeOsc}` }}>
+                📷 Seleccionar imagen del racimo
+              </button>
+            )}
+            {checks.map((c,i) => (
+              <div key={i} style={{ display:"flex", alignItems:"center", gap:10, fontSize:13 }}>
+                <div style={{ width:18, height:18, borderRadius:"50%", background:S.exito,
+                  display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0 }}>
+                  <svg width={10} height={10} viewBox="0 0 24 24" fill="none">
+                    <path d="M4 12.5L9 17.5L20 6.5" stroke={S.verdeOsc} strokeWidth={2.5}
+                      strokeLinecap="round" strokeLinejoin="round"/>
+                  </svg>
+                </div>
+                <span style={{ color:S.gris2 }}>{c.label}</span>
+              </div>
+            ))}
+            {!loading && !imgAnotada && (
+              <button onClick={handleEnviar} disabled={!preview || !loteId}
+                style={btn({ opacity:(!preview || !loteId) ? 0.5 : 1 })}>
+                🔍 Enviar a clasificación
+              </button>
+            )}
+            {imgAnotada && (
+              <div style={{ background:S.infoFondo, borderRadius:8, padding:"10px 14px", fontSize:13, color:S.infoTxt }}>
+                ✓ Detección completada — redirigiendo al resultado...
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
   );
 }
 
-function ResultadoClasificacion({ resultado, loteId, onGuardar }) {
+function ResultadoClasificacion({ resultado, loteId, fecha, onGuardar }) {
   const [saved, setSaved] = useState(false);
   const esCat1 = resultado?.aprobado_exportacion;
 
   const handleGuardar = async () => {
     try {
-      await fetch(`${API}/clasificaciones?lote_id=${loteId}&variedad=${resultado.variedad}&categoria=${resultado.categoria_label}&confianza=${resultado.confianza}&aprobado=${esCat1?1:0}&criterios=${encodeURIComponent(JSON.stringify(resultado.criterios_cumplidos))}`, { method:"POST" });
+      await fetch(`${API}/clasificaciones?lote_id=${loteId}&variedad=${resultado.variedad}&categoria=${resultado.categoria_label}&confianza=${resultado.confianza}&aprobado=${esCat1?1:0}&criterios=${encodeURIComponent(JSON.stringify(resultado.criterios_cumplidos))}&fecha_inspeccion=${fecha||""}`, { method:"POST" });
     } catch(_) {}
     setSaved(true);
     setTimeout(() => onGuardar(), 900);
@@ -384,7 +496,7 @@ function ResultadoClasificacion({ resultado, loteId, onGuardar }) {
             </div>
           </div>
           <div style={{ marginTop:8, fontSize:13, color:S.gris2 }}>
-            Fecha: {new Date().toLocaleDateString("es-PE")} — {new Date().toLocaleTimeString("es-PE",{hour:"2-digit",minute:"2-digit"})}
+            Fecha de inspección: {fecha || "—"}
           </div>
         </div>
         <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px" }}>
@@ -412,25 +524,45 @@ function ResultadoClasificacion({ resultado, loteId, onGuardar }) {
 
 function Historial({ rows }) {
   const [selected, setSelected] = useState(0);
-  const s = rows[selected] || rows[0];
+  const [busqueda, setBusqueda] = useState("");
+  const [filtroCategoria, setFiltroCategoria] = useState("todas");
+
+  const filasFiltradas = rows.filter(r => {
+    const coincideLote = r.lote.toLowerCase().includes(busqueda.trim().toLowerCase());
+    const coincideCategoria = filtroCategoria === "todas" || r.tipo === filtroCategoria;
+    return coincideLote && coincideCategoria;
+  });
+  const s = filasFiltradas[selected] || filasFiltradas[0];
+
   return (
     <div style={pageWrap}>
       <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Historial de Clasificaciones</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
         <div style={{ display:"flex", gap:8 }}>
-          <input placeholder="Buscar por lote..." style={{ ...input, flex:1, height:40 }}/>
-          <button style={{ height:40, border:`1px solid ${S.borde}`, borderRadius:8,
-            background:S.blanco, padding:"0 14px", fontSize:13, cursor:"pointer", color:S.gris2 }}>
-            ▼ Filtrar
-          </button>
+          <input placeholder="Buscar por lote..." value={busqueda}
+            onChange={e => { setBusqueda(e.target.value); setSelected(0); }}
+            style={{ ...input, flex:1, height:40 }}/>
+          <select value={filtroCategoria}
+            onChange={e => { setFiltroCategoria(e.target.value); setSelected(0); }}
+            style={{ height:40, border:`1px solid ${S.borde}`, borderRadius:8,
+              background:S.blanco, padding:"0 10px", fontSize:13, color:S.gris2, appearance:"none" }}>
+            <option value="todas">Todas</option>
+            <option value="cat1">Categoría 1</option>
+            <option value="cat2">Categoría 2</option>
+          </select>
         </div>
+        {filasFiltradas.length === 0 && (
+          <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
+            ℹ No se encontraron registros con esos filtros.
+          </div>
+        )}
         <div style={{ background:S.blanco, border:`1px solid ${S.borde}`, borderRadius:12, overflow:"hidden" }}>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr .8fr 1fr",
             padding:"12px 16px", borderBottom:`1px solid ${S.borde}`,
             fontSize:12, fontWeight:600, color:S.gris2, background:"#FAFAFA" }}>
             <span>Lote</span><span>Categoría</span><span>Conf.</span><span>Fecha</span>
           </div>
-          {rows.map((r,i) => (
+          {filasFiltradas.map((r,i) => (
             <div key={i} onClick={() => setSelected(i)}
               style={{ display:"grid", gridTemplateColumns:"1fr 1fr .8fr 1fr",
                 padding:"12px 16px", borderBottom:`1px solid ${S.borde}`,
@@ -480,17 +612,13 @@ function Historial({ rows }) {
 function HistorialSupervisor() {
   const [rows,    setRows]    = useState([]);
   const [loading, setLoading] = useState(true);
-  const [stats,   setStats]   = useState({ total:0, correctas:0, incorrectas:0, precision_pct:0 });
+  const [filtroCategoria, setFiltroCategoria] = useState("todas");
 
   useEffect(() => {
-    Promise.all([
-      fetch(`${API}/validaciones?limit=30`).then(r => r.json()),
-      fetch(`${API}/validaciones/stats`).then(r => r.json()),
-    ]).then(([v, s]) => {
-      setRows(Array.isArray(v) ? v : []);
-      setStats(s);
-      setLoading(false);
-    }).catch(() => setLoading(false));
+    fetch(`${API}/validaciones?limit=30`)
+      .then(r => r.json())
+      .then(v => { setRows(Array.isArray(v) ? v : []); setLoading(false); })
+      .catch(() => setLoading(false));
   }, []);
 
   if (loading) return (
@@ -499,40 +627,43 @@ function HistorialSupervisor() {
     </div>
   );
 
+  const filasFiltradas = rows.filter(r => filtroCategoria === "todas" || r.categoria_modelo === filtroCategoria);
+
   return (
     <div style={pageWrap}>
       <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Historial de Validaciones</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-        <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
-          {[
-            { val:stats.total,                     label:"total validadas",  color:S.gris1    },
-            { val:`${stats.precision_pct ?? 0} %`, label:"precisión modelo", color:S.verdeOsc },
-            { val:stats.incorrectas ?? 0,          label:"erróneas",         color:"#E53935"  },
-          ].map((m,i) => (
-            <div key={i} style={{ ...card, textAlign:"center" }}>
-              <div style={{ fontSize:24, fontWeight:700, color:m.color }}>{m.val}</div>
-              <div style={{ fontSize:11, color:S.gris2, marginTop:4 }}>{m.label}</div>
-            </div>
-          ))}
-        </div>
+        {rows.length > 0 && (
+          <select value={filtroCategoria} onChange={e => setFiltroCategoria(e.target.value)}
+            style={{ height:40, border:`1px solid ${S.borde}`, borderRadius:8,
+              background:S.blanco, padding:"0 10px", fontSize:13, color:S.gris2, appearance:"none", alignSelf:"flex-start" }}>
+            <option value="todas">Todas las categorías</option>
+            <option value="Categoría 1">Categoría 1</option>
+            <option value="Categoría 2">Categoría 2</option>
+          </select>
+        )}
         {rows.length === 0 ? (
           <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
             ℹ Aún no hay validaciones registradas.
           </div>
+        ) : filasFiltradas.length === 0 ? (
+          <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
+            ℹ No se encontraron registros con esos filtros.
+          </div>
         ) : (
           <div style={{ background:S.blanco, border:`1px solid ${S.borde}`, borderRadius:12, overflow:"hidden" }}>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1.2fr .8fr 1fr",
+            <div style={{ display:"grid", gridTemplateColumns:"1.2fr .7fr .8fr 1fr",
               padding:"12px 16px", borderBottom:`1px solid ${S.borde}`,
               fontSize:12, fontWeight:600, color:S.gris2, background:"#FAFAFA" }}>
-              <span>Lote</span><span>Categoría modelo</span><span>Resultado</span><span>Fecha</span>
+              <span>Categoría modelo</span><span>Confianza</span><span>Resultado</span><span>Fecha</span>
             </div>
-            {rows.map((r,i) => (
-              <div key={i} style={{ display:"grid", gridTemplateColumns:"1fr 1.2fr .8fr 1fr",
+            {filasFiltradas.map((r,i) => (
+              <div key={i} style={{ display:"grid", gridTemplateColumns:"1.2fr .7fr .8fr 1fr",
                 padding:"12px 16px", borderBottom:`1px solid ${S.borde}`,
                 fontSize:13, color:S.gris1, alignItems:"center",
                 background: i%2===0 ? S.blanco : "#FAFAFA" }}>
-                <span style={{ fontWeight:500 }}>{r.lote_id}</span>
                 <span style={{ fontSize:12, color:S.gris2 }}>{r.categoria_modelo}</span>
+                <span style={{ fontSize:12, color:S.gris2 }}>{r.confianza!=null ? `${(r.confianza*100).toFixed(1)} %` : "—"}</span>
                 <span>
                   <span style={{ padding:"3px 10px", borderRadius:20, fontSize:11, fontWeight:600,
                     background: r.es_correcta ? S.verdeBadge : "#FFEBEE",
@@ -547,6 +678,130 @@ function HistorialSupervisor() {
               </div>
             ))}
           </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PieCard({ data, colors, height=220 }) {
+  return (
+    <div style={card}>
+      <ResponsiveContainer width="100%" height={height}>
+        <PieChart>
+          <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%"
+            innerRadius={50} outerRadius={80} paddingAngle={3}>
+            {data.map((d,i) => <Cell key={i} fill={colors[i % colors.length]}/>)}
+          </Pie>
+          <Tooltip formatter={(v) => [v, "cantidad"]}/>
+          <Legend verticalAlign="bottom" height={30} iconType="circle"/>
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+function DashboardOperario() {
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API}/clasificaciones/stats`)
+      .then(r => r.json())
+      .then(setStats)
+      .catch(() => setStats({ total:0, cat1:0, cat2:0, cat1_pct:0, cat2_pct:0 }));
+  }, []);
+
+  if (!stats) return (
+    <div style={pageWrap}>
+      <div style={{ textAlign:"center", padding:60, color:S.gris3 }}>Cargando...</div>
+    </div>
+  );
+
+  const data = [
+    { name:"Categoría 1", value: stats.cat1 },
+    { name:"Categoría 2", value: stats.cat2 },
+  ];
+
+  return (
+    <div style={pageWrap}>
+      <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Dashboard de Resultados</h2>
+      <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+        {stats.total === 0 ? (
+          <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
+            ℹ Aún no hay clasificaciones registradas.
+          </div>
+        ) : (
+          <>
+            <PieCard data={data} colors={[S.verdeOsc, S.ambarTxt]}/>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
+              {[
+                { val:stats.total,           label:"total clasificado", color:S.gris1    },
+                { val:`${stats.cat1_pct} %`, label:"categoría 1",       color:S.verdeOsc },
+                { val:`${stats.cat2_pct} %`, label:"categoría 2",       color:S.ambarTxt },
+              ].map((m,i) => (
+                <div key={i} style={{ ...card, textAlign:"center" }}>
+                  <div style={{ fontSize:22, fontWeight:700, color:m.color }}>{m.val}</div>
+                  <div style={{ fontSize:11, color:S.gris2, marginTop:4 }}>{m.label}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DashboardSupervisor() {
+  const [stats, setStats] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API}/validaciones/stats`)
+      .then(r => r.json())
+      .then(setStats)
+      .catch(() => setStats({ total:0, correctas:0, incorrectas:0, precision_pct:0, precision_reciente_pct:0, desviacion:false }));
+  }, []);
+
+  if (!stats) return (
+    <div style={pageWrap}>
+      <div style={{ textAlign:"center", padding:60, color:S.gris3 }}>Cargando...</div>
+    </div>
+  );
+
+  const data = [
+    { name:"Correctas",   value: stats.correctas },
+    { name:"Incorrectas", value: stats.incorrectas },
+  ];
+
+  return (
+    <div style={pageWrap}>
+      <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Dashboard de Desviación</h2>
+      <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+        {stats.desviacion && (
+          <div style={{ background:S.ambar, borderRadius:8, padding:"12px 14px", color:S.ambarTxt, fontSize:13, fontWeight:600 }}>
+            ⚠ Precisión reciente ({stats.precision_reciente_pct} %) por debajo del promedio histórico ({stats.precision_pct} %)
+          </div>
+        )}
+        {stats.total === 0 ? (
+          <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
+            ℹ Aún no hay validaciones registradas.
+          </div>
+        ) : (
+          <>
+            <PieCard data={data} colors={[S.verdeOsc, "#E53935"]}/>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
+              {[
+                { val:stats.total,                     label:"total validadas",  color:S.gris1    },
+                { val:`${stats.precision_pct ?? 0} %`, label:"precisión modelo", color:S.verdeOsc },
+                { val:stats.incorrectas ?? 0,          label:"erróneas",         color:"#E53935"  },
+              ].map((m,i) => (
+                <div key={i} style={{ ...card, textAlign:"center" }}>
+                  <div style={{ fontSize:22, fontWeight:700, color:m.color }}>{m.val}</div>
+                  <div style={{ fontSize:11, color:S.gris2, marginTop:4 }}>{m.label}</div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
     </div>
@@ -597,20 +852,32 @@ function CapturaGaleria({ onClasificar }) {
   const [file,       setFile]       = useState(null);
   const [loading,    setLoading]    = useState(false);
   const [imgAnotada, setImgAnotada] = useState(null);
+  const [error,      setError]      = useState(null);
+  const [indeterminado, setIndeterminado] = useState(null);
   const fileRef = useRef();
 
   const handleFile = (f) => {
-    if (!f) return; setFile(f); setImgAnotada(null);
+    if (!f) return;
+    setError(null); setIndeterminado(null);
+    const err = validarArchivo(f);
+    if (err) { setError(err); setFile(null); setPreview(null); return; }
+    setFile(f); setImgAnotada(null);
     const r = new FileReader(); r.onload = e => setPreview(e.target.result); r.readAsDataURL(f);
   };
 
   const handleClasificar = async () => {
     if (!file) return;
-    setLoading(true);
+    setLoading(true); setError(null); setIndeterminado(null);
     let resultado = null;
     try {
       const fd = new FormData(); fd.append("file", file);
       const res  = await fetch(`${API}/predict`, { method:"POST", body:fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        setError(err?.detail || "No se pudo procesar la imagen.");
+        setLoading(false);
+        return;
+      }
       const data = await res.json();
       resultado  = data.resultado;
     } catch(_) {}
@@ -627,6 +894,11 @@ function CapturaGaleria({ onClasificar }) {
         imagen_anotada:null,
       };
     }
+    if (resultado.indeterminado) {
+      setIndeterminado(resultado);
+      setLoading(false);
+      return;
+    }
     if (resultado.imagen_anotada) {
       setImgAnotada(resultado.imagen_anotada);
       setLoading(false);
@@ -635,6 +907,10 @@ function CapturaGaleria({ onClasificar }) {
       setLoading(false);
       onClasificar(resultado);
     }
+  };
+
+  const otraImagen = () => {
+    setIndeterminado(null); setFile(null); setPreview(null); setError(null);
   };
 
   const toggleBtn = (sel, label) => {
@@ -656,61 +932,66 @@ function CapturaGaleria({ onClasificar }) {
       <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Captura de Imagen</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
         <div>
-          <Label>Lote asociado</Label>
-          <div style={{ ...input, height:48, display:"flex", alignItems:"center", marginTop:6, color:S.gris2 }}>
-            L-2026-021 · Fundo La Esperanza
-          </div>
-        </div>
-        <div>
           <Label>Origen de imagen</Label>
           <div style={{ display:"flex", gap:10, marginTop:6 }}>
             {toggleBtn("camara","Cámara")}
             {toggleBtn("galeria","Galería")}
           </div>
         </div>
-        {loading ? (
-          <Spinner texto="Analizando con YOLOv8..." />
+        {error && (
+          <div style={{ background:"#FFEBEE", borderRadius:8, padding:"10px 14px", color:"#C62828", fontSize:13, fontWeight:500 }}>
+            ⚠ {error}
+          </div>
+        )}
+        {indeterminado ? (
+          <TarjetaIndeterminado resultado={indeterminado} onReintentar={handleClasificar} onOtraImagen={otraImagen}/>
         ) : (
-          <div onClick={() => !preview && fileRef.current.click()}
-            style={{ width:"100%", minHeight:280, borderRadius:12, overflow:"hidden",
-              border:`2px dashed ${S.verdeOsc}`, background:"#f9f9f9",
-              cursor: preview ? "default" : "pointer", display:"flex",
-              alignItems:"center", justifyContent:"center" }}>
-            {imgAnotada
-              ? <img src={imgAnotada} alt="anotada" style={{ width:"100%", maxHeight:420, objectFit:"contain", display:"block" }}/>
-              : preview
-                ? <img src={preview} alt="" style={{ width:"100%", maxHeight:420, objectFit:"cover", display:"block" }}/>
-                : <div style={{ textAlign:"center", color:S.gris3, fontSize:15, padding:40 }}>
-                    <div style={{ fontSize:48, marginBottom:12 }}>🖼</div>
-                    Selecciona desde galería
-                  </div>
-            }
-          </div>
-        )}
-        <input ref={fileRef} type="file" accept="image/*" style={{ display:"none" }}
-          onChange={e => handleFile(e.target.files[0])}/>
-        {!loading && !imgAnotada && (
           <>
-            <button onClick={() => fileRef.current.click()}
-              style={{ ...btn(), background:S.blanco, color:S.verdeOsc, border:`1.5px solid ${S.verdeOsc}` }}>
-              📁 Seleccionar imagen
-            </button>
-            <button onClick={handleClasificar} disabled={!preview} style={btn({ opacity:!preview ? 0.5 : 1 })}>
-              Usar imagen y clasificar
-            </button>
+            {loading ? (
+              <Spinner texto="Analizando con YOLOv8..." />
+            ) : (
+              <div onClick={() => !preview && fileRef.current.click()}
+                style={{ width:"100%", minHeight:280, borderRadius:12, overflow:"hidden",
+                  border:`2px dashed ${S.verdeOsc}`, background:"#f9f9f9",
+                  cursor: preview ? "default" : "pointer", display:"flex",
+                  alignItems:"center", justifyContent:"center" }}>
+                {imgAnotada
+                  ? <img src={imgAnotada} alt="anotada" style={{ width:"100%", maxHeight:420, objectFit:"contain", display:"block" }}/>
+                  : preview
+                    ? <img src={preview} alt="" style={{ width:"100%", maxHeight:420, objectFit:"cover", display:"block" }}/>
+                    : <div style={{ textAlign:"center", color:S.gris3, fontSize:15, padding:40 }}>
+                        <div style={{ fontSize:48, marginBottom:12 }}>🖼</div>
+                        Selecciona desde galería (JPG/PNG, máx. {TAMANO_MAXIMO_MB}MB)
+                      </div>
+                }
+              </div>
+            )}
+            <input ref={fileRef} type="file" accept="image/jpeg,image/png" style={{ display:"none" }}
+              onChange={e => handleFile(e.target.files[0])}/>
+            {!loading && !imgAnotada && (
+              <>
+                <button onClick={() => fileRef.current.click()}
+                  style={{ ...btn(), background:S.blanco, color:S.verdeOsc, border:`1.5px solid ${S.verdeOsc}` }}>
+                  📁 Seleccionar imagen
+                </button>
+                <button onClick={handleClasificar} disabled={!preview} style={btn({ opacity:!preview ? 0.5 : 1 })}>
+                  Usar imagen y clasificar
+                </button>
+              </>
+            )}
+            {imgAnotada && (
+              <div style={{ background:S.infoFondo, borderRadius:8, padding:"10px 14px", fontSize:13, color:S.infoTxt }}>
+                ✓ Detección completada — redirigiendo...
+              </div>
+            )}
           </>
-        )}
-        {imgAnotada && (
-          <div style={{ background:S.infoFondo, borderRadius:8, padding:"10px 14px", fontSize:13, color:S.infoTxt }}>
-            ✓ Detección completada — redirigiendo...
-          </div>
         )}
       </div>
     </div>
   );
 }
 
-function DeteccionDefectos({ resultado, loteId, onGuardar }) {
+function DeteccionDefectos({ resultado, onGuardar }) {
   const confianza = resultado?.confianza || 0;
   const defectos  = resultado?.defectos  || [];
   const esCat1    = resultado?.aprobado_exportacion;
@@ -728,13 +1009,12 @@ function DeteccionDefectos({ resultado, loteId, onGuardar }) {
       await fetch(`${API}/validaciones/feedback`, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({
-          lote_id: loteId || "L-2026-021",
           categoria_modelo: resultado?.categoria_label || "",
           es_correcta: feedback === "correcto",
           observacion,
+          confianza,
         })
       });
-      await fetch(`${API}/clasificaciones?lote_id=${loteId||"L-2026-021"}&variedad=${resultado?.variedad||"Timpson"}&categoria=${resultado?.categoria_label||""}&confianza=${confianza}&aprobado=${esCat1?1:0}&perfil=supervisor`, { method:"POST" });
     } catch(_) {}
     setGuardando(false); setGuardado(true);
     setTimeout(() => onGuardar(), 1000);
@@ -829,55 +1109,16 @@ function DeteccionDefectos({ resultado, loteId, onGuardar }) {
 }
 
 function ValidacionPacking({ onRegistrar }) {
-  const [stats,   setStats]   = useState({ total:0, correctas:0, incorrectas:0, precision_pct:0 });
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    fetch(`${API}/validaciones/stats`)
-      .then(r => r.json())
-      .then(s => { setStats(s); setLoading(false); })
-      .catch(() => setLoading(false));
-  }, []);
-
   return (
     <div style={pageWrap}>
       <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Resumen de Validaciones</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-        <div style={{ fontSize:15, fontWeight:600, color:S.gris1 }}>Precisión acumulada del modelo</div>
-        {loading ? (
-          <div style={{ textAlign:"center", padding:40, color:S.gris3 }}>Cargando...</div>
-        ) : (
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
-            {[
-              { val:stats.total,                     label:"validaciones registradas", color:S.verdeOsc },
-              { val:`${stats.precision_pct ?? 0} %`, label:"precisión del modelo",     color:S.verdeOsc },
-              { val:stats.incorrectas ?? 0,          label:"clasificaciones erróneas",  color:"#E53935"  },
-            ].map((m,i) => (
-              <div key={i} style={{ ...card, textAlign:"center" }}>
-                <div style={{ fontSize:28, fontWeight:700, color:m.color }}>{m.val}</div>
-                <div style={{ fontSize:12, color:S.gris2, marginTop:4 }}>{m.label}</div>
-              </div>
-            ))}
-          </div>
-        )}
-        {!loading && stats.total > 0 && (
-          <div style={card}>
-            <div style={{ fontSize:13, color:S.gris2, marginBottom:8 }}>Distribución de validaciones</div>
-            <div style={{ height:12, background:"#FFEBEE", borderRadius:6, overflow:"hidden" }}>
-              <div style={{ width:`${stats.precision_pct ?? 0}%`, height:"100%", background:S.verdeOsc, borderRadius:6 }}/>
-            </div>
-            <div style={{ display:"flex", justifyContent:"space-between", marginTop:6, fontSize:12 }}>
-              <span style={{ color:S.verdeOsc }}>✓ Correctas: {stats.correctas}</span>
-              <span style={{ color:"#E53935" }}>✗ Incorrectas: {stats.incorrectas}</span>
-            </div>
-          </div>
-        )}
-        {!loading && stats.total === 0 && (
-          <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
-            ℹ Aún no hay validaciones registradas. Clasifica una imagen y marca si el resultado fue correcto.
-          </div>
-        )}
-        <div style={{ fontSize:12, color:S.gris3 }}>Fuente: validaciones registradas por supervisores de calidad</div>
+        <div style={{ background:S.exito, borderRadius:8, padding:"14px 16px", color:S.verdeOsc, fontSize:13, fontWeight:600 }}>
+          ✓ Validación registrada correctamente.
+        </div>
+        <div style={{ fontSize:12, color:S.gris3 }}>
+          Consulta la precisión acumulada del modelo en el Dashboard.
+        </div>
         <button onClick={onRegistrar} style={btn()}>📷 Clasificar otra imagen</button>
       </div>
     </div>
@@ -888,6 +1129,7 @@ export default function App() {
   const [role,      setRole]      = useState(null);
   const [screen,    setScreen]    = useState("roleSelect");
   const [loteData,  setLoteData]  = useState(null);
+  const [fechaResultado, setFechaResultado] = useState(fechaHoy());
   const [resultado, setResultado] = useState(null);
   const [historial, setHistorial] = useState(HISTORIAL_INICIAL);
 
@@ -920,21 +1162,22 @@ export default function App() {
     resultado:"Resultado de Clasificación",
     historial:"Historial de Clasificaciones",
     historialSupervisor:"Historial de Validaciones",
+    dashboard:"Dashboard",
     perfil:"Mi Perfil",
     captura2:"Captura de Imagen",
     defectos:"Detección de Defectos",
     validacion:"Resumen de Validaciones",
   };
 
-  const showBack = ["captura","resultado","defectos","validacion"].includes(screen);
+  const showBack = ["resultado","registro","defectos","validacion"].includes(screen);
 
   const goBack = () => {
-    const map = { resultado:"captura", captura:"registro", defectos:"captura2", validacion:"defectos" };
-    setScreen(map[screen] || "registro");
+    const map = { resultado:"captura", registro:"captura", defectos:"captura2", validacion:"defectos" };
+    setScreen(map[screen] || "captura");
   };
 
   const onNav = (tab) => {
-    if (tab === "inicio")    setScreen(role === "supervisor" ? "captura2" : "registro");
+    if (tab === "inicio")    setScreen(role === "supervisor" ? "captura2" : "captura");
     else if (tab === "historial") setScreen(role === "supervisor" ? "historialSupervisor" : "historial");
     else setScreen(tab);
   };
@@ -942,7 +1185,7 @@ export default function App() {
   const onGuardarResultado = () => {
     if (resultado) {
       setHistorial(h => [{
-        lote: loteData?.lote || "L-2026-015",
+        lote: loteData?.lote || "",
         categoria: resultado.categoria_label,
         confianza: resultado.confianza_pct || `${(resultado.confianza*100).toFixed(1)} %`,
         fecha: new Date().toLocaleDateString("es-PE") + " " +
@@ -961,21 +1204,27 @@ export default function App() {
       )}
       <div>
         {screen === "roleSelect" && (
-          <RoleSelect onSelect={r => { setRole(r); setScreen(r==="supervisor" ? "captura2" : "registro"); }}/>
+          <RoleSelect onSelect={r => { setRole(r); setScreen(r==="supervisor" ? "captura2" : "captura"); }}/>
         )}
         {screen === "registro" && (
           <RegistroLote onGuardar={d => { setLoteData(d); setScreen("captura"); }}/>
         )}
         {screen === "captura" && (
-          <CapturaImagen loteId={loteData?.lote||"L-2026-015"}
-            onEnviar={r => { setResultado(r); setScreen("resultado"); }}/>
+          <CapturaImagen loteInicial={loteData} onNuevoLote={() => setScreen("registro")}
+            onEnviar={(r, lote, fecha) => {
+              setResultado(r); setLoteData(d => ({ ...(d||{}), lote })); setFechaResultado(fecha);
+              setScreen("resultado");
+            }}/>
         )}
         {screen === "resultado" && (
           <ResultadoClasificacion resultado={resultado}
-            loteId={loteData?.lote||"L-2026-015"} onGuardar={onGuardarResultado}/>
+            loteId={loteData?.lote||""} fecha={fechaResultado} onGuardar={onGuardarResultado}/>
         )}
         {screen === "historial" && <Historial rows={historial}/>}
         {screen === "historialSupervisor" && <HistorialSupervisor/>}
+        {screen === "dashboard" && (
+          role === "supervisor" ? <DashboardSupervisor/> : <DashboardOperario/>
+        )}
         {screen === "perfil" && (
           <Perfil role={role} onCambiar={() => { setRole(null); setScreen("roleSelect"); }}/>
         )}
@@ -983,7 +1232,7 @@ export default function App() {
           <CapturaGaleria onClasificar={r => { setResultado(r); setScreen("defectos"); }}/>
         )}
         {screen === "defectos" && (
-          <DeteccionDefectos resultado={resultado} loteId="L-2026-021" onGuardar={() => setScreen("validacion")}/>
+          <DeteccionDefectos resultado={resultado} onGuardar={() => setScreen("validacion")}/>
         )}
         {screen === "validacion" && (
           <ValidacionPacking onRegistrar={() => setScreen("captura2")}/>
