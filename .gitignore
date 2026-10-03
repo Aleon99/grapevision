@@ -18,6 +18,9 @@ node_modules/
 frontend/dist/
 frontend/.env
 frontend/.env.local
+
+# Documentos personales (no forman parte del código del proyecto)
+*.docx
 frontend/.env.production
 
 # OS

@@ -25,6 +25,29 @@ npm run dev
 
 ---
 
+## Pruebas unitarias (backend)
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+
+Cubren la lógica de negocio sin depender de Supabase ni de una GPU:
+- `tests/test_validacion.py` — formato/tamaño/integridad de la imagen subida
+- `tests/test_clasificacion.py` — construcción del resultado (CAT1/CAT2/indeterminado) y las dos rutas de `clasificar_imagen` (YOLO real simulado con un modelo falso, y el fallback sin YOLO)
+- `tests/test_stats.py` — cálculo de precisión y detección de desviación (`/validaciones/stats`, `/clasificaciones/stats`), con la base de datos simulada (`unittest.mock`)
+- `tests/test_api.py` — endpoints con `TestClient` de FastAPI
+- `tests/test_sprints.py` — **un test de aceptación por sprint** (1 a 4), cada uno verificando el criterio principal que ese sprint entregó; para correr solo estos: `pytest tests/test_sprints.py`
+
+> La asignación de HU a cada sprint en `test_sprints.py` se basa en lo discutido durante el desarrollo — antes de citarla en el informe de tesis, verifícala contra tu propia tabla de Épicas/HU/Sprint.
+
+Al importar `main.py` vas a ver un aviso de "Error conectando a Supabase" si no tienes `backend/.env` configurado — es inofensivo, ningún test depende de la base de datos real.
+
+La salida usa `pytest-spec` (configurado en `pytest.ini`): cada test se muestra agrupado por archivo con un ✓ y la oración completa de su docstring en vez del nombre de la función — pensado para que la captura sea legible en un informe.
+
+---
+
 ## Despliegue GRATUITO en internet
 
 ### Opción A — Railway (recomendado, más fácil)

@@ -2,10 +2,19 @@ from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-import io, json, random, os, base64
+import io, json, random, os, base64, uuid
 from datetime import datetime
 from dotenv import load_dotenv
 load_dotenv()
+
+try:
+    from google.cloud import storage as gcs_storage
+    GCS_BUCKET = os.environ.get("GCS_BUCKET", "grapevision-502317-imagenes")
+    gcs_client = gcs_storage.Client()
+    GCS_AVAILABLE = True
+except Exception as e:
+    GCS_AVAILABLE = False
+    print(f"⚠️  Cloud Storage no disponible: {e}")
 
 try:
     from PIL import Image, ImageOps
@@ -79,8 +88,10 @@ def init_db():
         );
 
         ALTER TABLE clasificaciones ADD COLUMN IF NOT EXISTS fecha_inspeccion TEXT;
+        ALTER TABLE clasificaciones ADD COLUMN IF NOT EXISTS imagen_url TEXT;
         ALTER TABLE validaciones ALTER COLUMN lote_id DROP NOT NULL;
         ALTER TABLE validaciones ADD COLUMN IF NOT EXISTS confianza REAL;
+        ALTER TABLE validaciones ADD COLUMN IF NOT EXISTS clasificacion_id INTEGER REFERENCES clasificaciones(id);
     """)
     conn.commit()
     cur.close()
@@ -102,11 +113,9 @@ class LoteIn(BaseModel):
     perfil: Optional[str] = "operario"
 
 class FeedbackIn(BaseModel):
-    lote_id: Optional[str] = None
-    categoria_modelo: str
+    clasificacion_id: int
     es_correcta: bool
     observacion: Optional[str] = ""
-    confianza: Optional[float] = None
 
 # ── CONSTANTES ────────────────────────────────────────────────────────────────
 CRITERIOS = {
@@ -132,10 +141,6 @@ FORMATOS_PERMITIDOS = {"image/jpeg", "image/png"}
 TAMANO_MAXIMO_MB = 10
 CONFIANZA_MINIMA = 0.5
 
-# ── MONITOREO DE PRECISIÓN (HU014) ──────────────────────────────────────────────
-VENTANA_RECIENTE = 20
-UMBRAL_DESVIACION_PCT = 10
-
 def validar_imagen(contents: bytes, content_type: str):
     if content_type not in FORMATOS_PERMITIDOS:
         raise HTTPException(400, f"Formato no permitido ({content_type or 'desconocido'}). Usa JPG o PNG.")
@@ -146,6 +151,22 @@ def validar_imagen(contents: bytes, content_type: str):
             Image.open(io.BytesIO(contents)).verify()
         except Exception:
             raise HTTPException(400, "El archivo no es una imagen válida o está corrupto.")
+
+# ── ALMACENAMIENTO DE IMÁGENES (Cloud Storage) ─────────────────────────────────
+def subir_imagen(image_bytes: bytes, content_type: str) -> str:
+    """Sube la imagen original a Cloud Storage y devuelve su URL pública. Devuelve "" si Storage no está disponible o falla la subida."""
+    if not GCS_AVAILABLE:
+        return ""
+    try:
+        ext = "png" if content_type == "image/png" else "jpg"
+        nombre = f"clasificaciones/{datetime.utcnow():%Y/%m}/{uuid.uuid4().hex}.{ext}"
+        bucket = gcs_client.bucket(GCS_BUCKET)
+        blob = bucket.blob(nombre)
+        blob.upload_from_string(image_bytes, content_type=content_type)
+        return f"https://storage.googleapis.com/{GCS_BUCKET}/{nombre}"
+    except Exception as e:
+        print(f"⚠️  Error subiendo imagen a Cloud Storage: {e}")
+        return ""
 
 # ── DIBUJAR BOX ───────────────────────────────────────────────────────────────
 def dibujar_box(image_bytes: bytes, boxes_data: list, categoria: str, confianza: float):
@@ -199,7 +220,7 @@ def dibujar_box_sintetico(image_bytes: bytes, categoria: str, confianza: float):
     except: return None
 
 # ── CLASIFICACIÓN ─────────────────────────────────────────────────────────────
-def clasificar_imagen(image_bytes: bytes) -> dict:
+def clasificar_imagen(image_bytes: bytes, content_type: str = "image/jpeg") -> dict:
     if YOLO_AVAILABLE:
         try:
             img_pil = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB")
@@ -217,7 +238,8 @@ def clasificar_imagen(image_bytes: bytes) -> dict:
 
                 categoria = "cat1" if clase_idx == 0 else "cat2"
                 imagen_anotada = dibujar_box(image_bytes, all_boxes, categoria, confianza)
-                return _build_result("Timpson", categoria, confianza, imagen_anotada)
+                imagen_url = subir_imagen(image_bytes, content_type)
+                return _build_result("Timpson", categoria, confianza, imagen_anotada, imagen_url)
 
             print("YOLOv8: sin detecciones")
             return _build_result_indeterminado()
@@ -238,9 +260,10 @@ def clasificar_imagen(image_bytes: bytes) -> dict:
             confianza = 0.918 if categoria=="cat1" else round(0.78+rng.uniform(-0.04,0.06),3)
         except: pass
     imagen_anotada = dibujar_box_sintetico(image_bytes, categoria, confianza)
-    return _build_result("Timpson", categoria, confianza, imagen_anotada)
+    imagen_url = subir_imagen(image_bytes, content_type)
+    return _build_result("Timpson", categoria, confianza, imagen_anotada, imagen_url)
 
-def _build_result(variedad, categoria, confianza, imagen_anotada=None):
+def _build_result(variedad, categoria, confianza, imagen_anotada=None, imagen_url=""):
     num = "1" if categoria=="cat1" else "2"
     return {
         "variedad": variedad,
@@ -254,6 +277,7 @@ def _build_result(variedad, categoria, confianza, imagen_anotada=None):
         "defectos": DEFECTOS[categoria],
         "norma": "Codex Alimentarius / NTP 011.012",
         "imagen_anotada": imagen_anotada,
+        "imagen_url": imagen_url,
     }
 
 def _build_result_indeterminado(confianza=None, imagen_anotada=None):
@@ -298,17 +322,18 @@ def listar_lotes():
 async def predict(file: UploadFile = File(...)):
     contents = await file.read()
     validar_imagen(contents, file.content_type)
-    resultado = clasificar_imagen(contents)
+    resultado = clasificar_imagen(contents, file.content_type)
     return {"success":True,"archivo":file.filename,"resultado":resultado}
 
 @app.post("/clasificaciones", status_code=201)
 def guardar_clasificacion(lote_id:str, variedad:str, categoria:str, confianza:float,
-    criterios:str="[]", aprobado:int=0, imagen_nombre:str="", perfil:str="operario", fecha_inspeccion:str=""):
+    criterios:str="[]", aprobado:int=0, imagen_nombre:str="", imagen_url:str="",
+    perfil:str="operario", fecha_inspeccion:str=""):
     conn = get_db(); cur = conn.cursor()
     cur.execute("""INSERT INTO clasificaciones
-        (lote_id,variedad,categoria,confianza,criterios,aprobado_exportacion,imagen_nombre,perfil,fecha_inspeccion)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
-        (lote_id,variedad,categoria,confianza,criterios,aprobado,imagen_nombre,perfil,fecha_inspeccion))
+        (lote_id,variedad,categoria,confianza,criterios,aprobado_exportacion,imagen_nombre,imagen_url,perfil,fecha_inspeccion)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
+        (lote_id,variedad,categoria,confianza,criterios,aprobado,imagen_nombre,imagen_url,perfil,fecha_inspeccion))
     row_id = cur.fetchone()["id"]
     conn.commit(); cur.close(); conn.close()
     return {"id":row_id,"message":"Clasificación guardada"}
@@ -328,6 +353,7 @@ def listar_clasificaciones(limit:int=50):
 
 @app.get("/clasificaciones/stats")
 def stats_clasificaciones():
+    """HU009: resumen de resultados para el dashboard del operario — categorías y defectos."""
     conn = get_db(); cur = conn.cursor()
     cur.execute("SELECT COUNT(*) as total FROM clasificaciones WHERE perfil='operario'")
     total = cur.fetchone()["total"]
@@ -339,43 +365,118 @@ def stats_clasificaciones():
     cat1_pct = round((cat1/total*100),1) if total>0 else 0
     cat2_pct = round((cat2/total*100),1) if total>0 else 0
 
-    return {"total":total,"cat1":cat1,"cat2":cat2,
-            "cat1_pct":cat1_pct,"cat2_pct":cat2_pct}
+    # Los defectos se derivan de la categoría: el modelo clasifica CAT1/CAT2,
+    # no detecta tipos de defecto de forma independiente (ver DEFECTOS).
+    defectos = [
+        {"nombre": "Mancha leve", "detectados": cat2},
+        {"nombre": "Variación de color", "detectados": cat2},
+        {"nombre": "Rastro severo", "detectados": 0},
+    ]
 
-# ── FEEDBACK SUPERVISOR (nuevo) ───────────────────────────────────────────────
+    return {"total":total,"cat1":cat1,"cat2":cat2,
+            "cat1_pct":cat1_pct,"cat2_pct":cat2_pct,
+            "defectos":defectos}
+
+@app.get("/clasificaciones/revision")
+def listar_para_revision(estado:str="todas", fecha_desde:str="", fecha_hasta:str="", lote_id:str="", limit:int=50):
+    """HU010: historial de clasificaciones con su estado de comparación (coincidencia/discrepancia/pendiente)."""
+    condiciones = ["c.perfil = 'operario'"]
+    params = []
+    if fecha_desde:
+        condiciones.append("c.fecha_inspeccion >= %s"); params.append(fecha_desde)
+    if fecha_hasta:
+        condiciones.append("c.fecha_inspeccion <= %s"); params.append(fecha_hasta)
+    if lote_id:
+        condiciones.append("c.lote_id = %s"); params.append(lote_id)
+    if estado == "pendiente":
+        condiciones.append("v.id IS NULL")
+    elif estado == "coincidencia":
+        condiciones.append("v.es_correcta = true")
+    elif estado == "discrepancia":
+        condiciones.append("v.es_correcta = false")
+
+    where_sql = " AND ".join(condiciones)
+    params.append(limit)
+
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(f"""
+        SELECT c.id, c.lote_id, c.variedad, c.categoria, c.confianza, c.imagen_url,
+               c.fecha_inspeccion, c.created_at,
+               v.id as validacion_id, v.es_correcta, v.observacion
+        FROM clasificaciones c
+        LEFT JOIN validaciones v ON v.clasificacion_id = c.id
+        WHERE {where_sql}
+        ORDER BY c.created_at DESC
+        LIMIT %s
+    """, params)
+    rows = cur.fetchall(); cur.close(); conn.close()
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        if d["validacion_id"] is None:
+            d["estado"] = "pendiente"
+        else:
+            d["estado"] = "coincidencia" if d["es_correcta"] else "discrepancia"
+        result.append(d)
+    return result
+
+# ── FEEDBACK SUPERVISOR (HU013) ────────────────────────────────────────────────
 @app.post("/validaciones/feedback", status_code=201)
 def guardar_feedback(data: FeedbackIn):
     conn = get_db(); cur = conn.cursor()
-    cur.execute("""INSERT INTO validaciones
-        (lote_id, categoria_modelo, es_correcta, observacion, confianza)
-        VALUES (%s,%s,%s,%s,%s) RETURNING id""",
-        (data.lote_id, data.categoria_modelo, data.es_correcta, data.observacion, data.confianza))
+    cur.execute("SELECT categoria, confianza, lote_id FROM clasificaciones WHERE id = %s", (data.clasificacion_id,))
+    clasificacion = cur.fetchone()
+    if not clasificacion:
+        cur.close(); conn.close()
+        raise HTTPException(404, "La clasificación indicada no existe.")
+
+    cur.execute("SELECT id FROM validaciones WHERE clasificacion_id = %s", (data.clasificacion_id,))
+    existente = cur.fetchone()
+    if existente:
+        cur.execute("""UPDATE validaciones SET es_correcta=%s, observacion=%s WHERE id=%s RETURNING id""",
+            (data.es_correcta, data.observacion, existente["id"]))
+    else:
+        cur.execute("""INSERT INTO validaciones
+            (lote_id, categoria_modelo, es_correcta, observacion, confianza, clasificacion_id)
+            VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (clasificacion["lote_id"], clasificacion["categoria"], data.es_correcta,
+             data.observacion, clasificacion["confianza"], data.clasificacion_id))
     row_id = cur.fetchone()["id"]
     conn.commit(); cur.close(); conn.close()
     return {"id":row_id,"message":"Feedback registrado"}
 
 @app.get("/validaciones/stats")
 def stats_validaciones():
+    """HU014: precisión preliminar = coincidencias / comparaciones válidas (excluye pendientes)."""
     conn = get_db(); cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) as total FROM validaciones")
+    cur.execute("SELECT COUNT(*) as total FROM clasificaciones WHERE perfil='operario'")
     total = cur.fetchone()["total"]
-    cur.execute("SELECT COUNT(*) as correctas FROM validaciones WHERE es_correcta=true")
-    correctas = cur.fetchone()["correctas"]
-    cur.execute("SELECT es_correcta FROM validaciones ORDER BY created_at DESC LIMIT %s", (VENTANA_RECIENTE,))
-    recientes = cur.fetchall()
+    cur.execute("""
+        SELECT COUNT(*) as validas,
+               COUNT(*) FILTER (WHERE v.es_correcta = true)  as coincidencias,
+               COUNT(*) FILTER (WHERE v.es_correcta = false) as discrepancias
+        FROM clasificaciones c
+        JOIN validaciones v ON v.clasificacion_id = c.id
+        WHERE c.perfil = 'operario'
+    """)
+    row = cur.fetchone()
     cur.close(); conn.close()
 
-    incorrectas = total - correctas
-    precision   = round((correctas/total*100),1) if total>0 else 0
+    validas = row["validas"]
+    coincidencias = row["coincidencias"]
+    discrepancias = row["discrepancias"]
+    pendientes = total - validas
 
-    total_reciente     = len(recientes)
-    correctas_reciente = sum(1 for r in recientes if r["es_correcta"])
-    precision_reciente = round((correctas_reciente/total_reciente*100),1) if total_reciente>0 else 0
-    desviacion = total_reciente>0 and (precision - precision_reciente) >= UMBRAL_DESVIACION_PCT
+    tiene_datos = validas > 0
+    precision_preliminar_pct = round((coincidencias/validas*100),1) if tiene_datos else None
+    tasa_discrepancias_pct   = round((discrepancias/validas*100),1) if tiene_datos else None
 
-    return {"total":total,"correctas":correctas,
-            "incorrectas":incorrectas,"precision_pct":precision,
-            "precision_reciente_pct":precision_reciente,"desviacion":desviacion}
+    return {"total":total, "validas":validas, "pendientes":pendientes,
+            "coincidencias":coincidencias, "discrepancias":discrepancias,
+            "precision_preliminar_pct":precision_preliminar_pct,
+            "tasa_discrepancias_pct":tasa_discrepancias_pct,
+            "tiene_datos":tiene_datos}
 
 @app.get("/validaciones")
 def listar_validaciones(limit:int=50):

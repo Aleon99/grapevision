@@ -17,6 +17,19 @@ const S = {
   verdeBadge:"#D4EDDA", infoFondo:"#EBF4FF", infoTxt:"#1565C0", exito:"#E8F5EE",
 };
 
+const DEFECTOS_CLIENTE = {
+  cat1: [
+    { nombre:"Mancha leve",        estado:"No detectada", color:"#2E7D4F" },
+    { nombre:"Variación de color", estado:"No detectada", color:"#2E7D4F" },
+    { nombre:"Rastro severo",      estado:"No detectado", color:"#2E7D4F" },
+  ],
+  cat2: [
+    { nombre:"Mancha leve",        estado:"Detectada",    color:"#E53935" },
+    { nombre:"Variación de color", estado:"Detectada",    color:"#F57C00" },
+    { nombre:"Rastro severo",      estado:"No detectado", color:"#2E7D4F" },
+  ],
+};
+
 const btn = (extra={}) => ({
   height:48, borderRadius:8, border:"none", background:S.verdeOsc,
   color:"#fff", fontSize:15, fontWeight:600, fontFamily:"inherit",
@@ -450,7 +463,7 @@ function ResultadoClasificacion({ resultado, loteId, fecha, onGuardar }) {
 
   const handleGuardar = async () => {
     try {
-      await fetch(`${API}/clasificaciones?lote_id=${loteId}&variedad=${resultado.variedad}&categoria=${resultado.categoria_label}&confianza=${resultado.confianza}&aprobado=${esCat1?1:0}&criterios=${encodeURIComponent(JSON.stringify(resultado.criterios_cumplidos))}&fecha_inspeccion=${fecha||""}`, { method:"POST" });
+      await fetch(`${API}/clasificaciones?lote_id=${loteId}&variedad=${resultado.variedad}&categoria=${resultado.categoria_label}&confianza=${resultado.confianza}&aprobado=${esCat1?1:0}&criterios=${encodeURIComponent(JSON.stringify(resultado.criterios_cumplidos))}&imagen_url=${encodeURIComponent(resultado.imagen_url||"")}&fecha_inspeccion=${fecha||""}`, { method:"POST" });
     } catch(_) {}
     setSaved(true);
     setTimeout(() => onGuardar(), 900);
@@ -609,74 +622,158 @@ function Historial({ rows }) {
   );
 }
 
-function HistorialSupervisor() {
-  const [rows,    setRows]    = useState([]);
+const ESTADO_INFO = {
+  pendiente:    { label:"Pendiente",    bg:S.ambar,      color:S.ambarTxt },
+  coincidencia: { label:"Coincidencia", bg:S.verdeBadge, color:S.verdeOsc },
+  discrepancia: { label:"Discrepancia", bg:"#FFEBEE",    color:"#C62828" },
+};
+
+function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión de Clasificaciones" }) {
+  const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filtroCategoria, setFiltroCategoria] = useState("todas");
+  const [estado, setEstado] = useState(estadoInicial);
+  const [lote, setLote] = useState("");
+  const [fechaDesde, setFechaDesde] = useState("");
+  const [fechaHasta, setFechaHasta] = useState("");
+  const [seleccionado, setSeleccionado] = useState(null);
+  const [observacion, setObservacion] = useState("");
+  const [guardando, setGuardando] = useState(false);
 
-  useEffect(() => {
-    fetch(`${API}/validaciones?limit=30`)
+  const cargar = () => {
+    setLoading(true);
+    const params = new URLSearchParams({ estado, limit:"50" });
+    if (lote) params.set("lote_id", lote);
+    if (fechaDesde) params.set("fecha_desde", fechaDesde);
+    if (fechaHasta) params.set("fecha_hasta", fechaHasta);
+    fetch(`${API}/clasificaciones/revision?${params}`)
       .then(r => r.json())
-      .then(v => { setRows(Array.isArray(v) ? v : []); setLoading(false); })
+      .then(data => { setRows(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => setLoading(false));
-  }, []);
+  };
 
-  if (loading) return (
-    <div style={pageWrap}>
-      <div style={{ textAlign:"center", padding:60, color:S.gris3 }}>Cargando...</div>
-    </div>
-  );
+  useEffect(cargar, [estado]);
 
-  const filasFiltradas = rows.filter(r => filtroCategoria === "todas" || r.categoria_modelo === filtroCategoria);
+  const abrir = (r) => { setSeleccionado(r); setObservacion(r.observacion || ""); };
+  const cerrar = () => { setSeleccionado(null); setObservacion(""); };
+
+  const handleValidar = async (esCorrecta) => {
+    if (!seleccionado) return;
+    setGuardando(true);
+    try {
+      await fetch(`${API}/validaciones/feedback`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ clasificacion_id: seleccionado.id, es_correcta: esCorrecta, observacion }),
+      });
+      cerrar();
+      cargar();
+    } finally { setGuardando(false); }
+  };
+
+  if (seleccionado) {
+    const categoriaKey = seleccionado.categoria?.includes("1") ? "cat1" : "cat2";
+    const defectos = DEFECTOS_CLIENTE[categoriaKey];
+    return (
+      <div style={pageWrap}>
+        <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Validar Clasificación</h2>
+        <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+          <div style={{ borderRadius:12, overflow:"hidden", border:`1px solid ${S.borde}`, background:"#f5f5f5",
+            height:220, display:"flex", alignItems:"center", justifyContent:"center" }}>
+            {seleccionado.imagen_url ? (
+              <img src={seleccionado.imagen_url} alt="inspección" style={{ width:"100%", height:"100%", objectFit:"contain" }}/>
+            ) : (
+              <span style={{ color:S.gris3, fontSize:13 }}>🍇 Imagen no disponible</span>
+            )}
+          </div>
+          <div style={card}>
+            <div style={{ display:"flex", justifyContent:"space-between", fontSize:13, color:S.gris2 }}>
+              <span>Lote: <b style={{ color:S.gris1 }}>{seleccionado.lote_id}</b></span>
+              <span>Fecha: <b style={{ color:S.gris1 }}>{seleccionado.fecha_inspeccion || "—"}</b></span>
+            </div>
+            <div style={{ marginTop:12, fontSize:28, fontWeight:700, color:S.gris1 }}>{seleccionado.categoria}</div>
+            <div style={{ fontSize:13, color:S.gris2 }}>Confianza del modelo: {(seleccionado.confianza*100).toFixed(1)} %</div>
+          </div>
+          <div style={card}>
+            <div style={{ fontSize:14, fontWeight:600, color:S.gris1, marginBottom:10 }}>Defectos detectados</div>
+            {defectos.map((d,i) => (
+              <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0",
+                borderBottom: i<defectos.length-1 ? `1px solid ${S.borde}` : "none", fontSize:13 }}>
+                <span style={{ color:S.gris2 }}>{d.nombre}</span>
+                <span style={{ color:d.color, fontWeight:600 }}>{d.estado}</span>
+              </div>
+            ))}
+          </div>
+          <div>
+            <Label>Observación (opcional)</Label>
+            <textarea value={observacion} onChange={e => setObservacion(e.target.value)}
+              placeholder="Ej: el racimo real llegó como Categoría 1 a packing..."
+              style={{ ...input, height:80, marginTop:6, resize:"vertical", paddingTop:10 }}/>
+          </div>
+          <div style={{ display:"flex", gap:10 }}>
+            <button disabled={guardando} onClick={() => handleValidar(true)}
+              style={btn({ background:S.verdeOsc, flex:1 })}>✓ Coincide</button>
+            <button disabled={guardando} onClick={() => handleValidar(false)}
+              style={btn({ background:"#C62828", flex:1 })}>✗ Discrepancia</button>
+          </div>
+          <button onClick={cerrar} style={{ ...btn({ background:S.blanco, color:S.gris2 }), border:`1px solid ${S.borde}` }}>
+            Cancelar
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={pageWrap}>
-      <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Historial de Validaciones</h2>
+      <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>{titulo}</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-        {rows.length > 0 && (
-          <select value={filtroCategoria} onChange={e => setFiltroCategoria(e.target.value)}
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <select value={estado} onChange={e => setEstado(e.target.value)}
             style={{ height:40, border:`1px solid ${S.borde}`, borderRadius:8,
-              background:S.blanco, padding:"0 10px", fontSize:13, color:S.gris2, appearance:"none", alignSelf:"flex-start" }}>
-            <option value="todas">Todas las categorías</option>
-            <option value="Categoría 1">Categoría 1</option>
-            <option value="Categoría 2">Categoría 2</option>
+              background:S.blanco, padding:"0 10px", fontSize:13, color:S.gris2, appearance:"none" }}>
+            <option value="todas">Todos los estados</option>
+            <option value="pendiente">Pendientes</option>
+            <option value="coincidencia">Coincidencia</option>
+            <option value="discrepancia">Discrepancia</option>
           </select>
-        )}
-        {rows.length === 0 ? (
+          <input placeholder="Filtrar por lote..." value={lote} onChange={e => setLote(e.target.value)}
+            style={{ ...input, height:40, width:140 }}/>
+          <input type="date" value={fechaDesde} onChange={e => setFechaDesde(e.target.value)}
+            style={{ ...input, height:40, width:150 }}/>
+          <input type="date" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)}
+            style={{ ...input, height:40, width:150 }}/>
+          <button onClick={cargar} style={{ height:40, padding:"0 16px", borderRadius:8, border:"none",
+            background:S.verdeOsc, color:"#fff", fontWeight:600, fontSize:13, cursor:"pointer" }}>
+            Filtrar
+          </button>
+        </div>
+        {loading ? (
+          <div style={{ textAlign:"center", padding:60, color:S.gris3 }}>Cargando...</div>
+        ) : rows.length === 0 ? (
           <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
-            ℹ Aún no hay validaciones registradas.
-          </div>
-        ) : filasFiltradas.length === 0 ? (
-          <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
-            ℹ No se encontraron registros con esos filtros.
+            ℹ No se encontraron clasificaciones con esos filtros.
           </div>
         ) : (
-          <div style={{ background:S.blanco, border:`1px solid ${S.borde}`, borderRadius:12, overflow:"hidden" }}>
-            <div style={{ display:"grid", gridTemplateColumns:"1.2fr .7fr .8fr 1fr",
-              padding:"12px 16px", borderBottom:`1px solid ${S.borde}`,
-              fontSize:12, fontWeight:600, color:S.gris2, background:"#FAFAFA" }}>
-              <span>Categoría modelo</span><span>Confianza</span><span>Resultado</span><span>Fecha</span>
-            </div>
-            {filasFiltradas.map((r,i) => (
-              <div key={i} style={{ display:"grid", gridTemplateColumns:"1.2fr .7fr .8fr 1fr",
-                padding:"12px 16px", borderBottom:`1px solid ${S.borde}`,
-                fontSize:13, color:S.gris1, alignItems:"center",
-                background: i%2===0 ? S.blanco : "#FAFAFA" }}>
-                <span style={{ fontSize:12, color:S.gris2 }}>{r.categoria_modelo}</span>
-                <span style={{ fontSize:12, color:S.gris2 }}>{r.confianza!=null ? `${(r.confianza*100).toFixed(1)} %` : "—"}</span>
-                <span>
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            {rows.map(r => {
+              const e = ESTADO_INFO[r.estado];
+              return (
+                <div key={r.id} onClick={() => abrir(r)}
+                  style={{ ...card, display:"flex", alignItems:"center", gap:12, cursor:"pointer" }}>
+                  <div style={{ width:48, height:48, borderRadius:8, background:"#f0f0f0", flexShrink:0,
+                    display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden" }}>
+                    {r.imagen_url ? <img src={r.imagen_url} alt="" style={{ width:"100%", height:"100%", objectFit:"cover" }}/> : "🍇"}
+                  </div>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:13, fontWeight:600, color:S.gris1 }}>{r.lote_id} · {r.categoria}</div>
+                    <div style={{ fontSize:12, color:S.gris3 }}>{r.fecha_inspeccion || "—"} · {(r.confianza*100).toFixed(1)} % confianza</div>
+                  </div>
                   <span style={{ padding:"3px 10px", borderRadius:20, fontSize:11, fontWeight:600,
-                    background: r.es_correcta ? S.verdeBadge : "#FFEBEE",
-                    color: r.es_correcta ? S.verdeOsc : "#C62828" }}>
-                    {r.es_correcta ? "✓ Correcto" : "✗ Incorrecto"}
+                    background:e.bg, color:e.color, whiteSpace:"nowrap" }}>
+                    {e.label}
                   </span>
-                </span>
-                <span style={{ fontSize:12, color:S.gris2 }}>
-                  {new Date(r.created_at + "Z").toLocaleDateString("es-PE")}<br/>
-                  {new Date(r.created_at + "Z").toLocaleTimeString("es-PE",{hour:"2-digit",minute:"2-digit"})}
-                </span>
-              </div>
-            ))}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -732,6 +829,7 @@ function DashboardOperario() {
           </div>
         ) : (
           <>
+            <div style={{ fontSize:13, fontWeight:600, color:S.gris2 }}>Por categoría</div>
             <PieCard data={data} colors={[S.verdeOsc, S.ambarTxt]}/>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
               {[
@@ -745,6 +843,18 @@ function DashboardOperario() {
                 </div>
               ))}
             </div>
+            {stats.defectos && (
+              <div style={card}>
+                <div style={{ fontSize:13, fontWeight:600, color:S.gris2, marginBottom:10 }}>Defectos detectados</div>
+                {stats.defectos.map((d,i) => (
+                  <div key={i} style={{ display:"flex", justifyContent:"space-between", padding:"6px 0",
+                    borderBottom: i<stats.defectos.length-1 ? `1px solid ${S.borde}` : "none", fontSize:13 }}>
+                    <span style={{ color:S.gris2 }}>{d.nombre}</span>
+                    <span style={{ color:S.gris1, fontWeight:600 }}>{d.detectados}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </>
         )}
       </div>
@@ -759,7 +869,7 @@ function DashboardSupervisor() {
     fetch(`${API}/validaciones/stats`)
       .then(r => r.json())
       .then(setStats)
-      .catch(() => setStats({ total:0, correctas:0, incorrectas:0, precision_pct:0, precision_reciente_pct:0, desviacion:false }));
+      .catch(() => setStats({ total:0, validas:0, pendientes:0, coincidencias:0, discrepancias:0, precision_preliminar_pct:null, tasa_discrepancias_pct:null, tiene_datos:false }));
   }, []);
 
   if (!stats) return (
@@ -769,31 +879,27 @@ function DashboardSupervisor() {
   );
 
   const data = [
-    { name:"Correctas",   value: stats.correctas },
-    { name:"Incorrectas", value: stats.incorrectas },
+    { name:"Coincidencias",  value: stats.coincidencias },
+    { name:"Discrepancias",  value: stats.discrepancias },
   ];
 
   return (
     <div style={pageWrap}>
-      <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Dashboard de Desviación</h2>
+      <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Dashboard de Precisión</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-        {stats.desviacion && (
-          <div style={{ background:S.ambar, borderRadius:8, padding:"12px 14px", color:S.ambarTxt, fontSize:13, fontWeight:600 }}>
-            ⚠ Precisión reciente ({stats.precision_reciente_pct} %) por debajo del promedio histórico ({stats.precision_pct} %)
-          </div>
-        )}
-        {stats.total === 0 ? (
+        {!stats.tiene_datos ? (
           <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
-            ℹ Aún no hay validaciones registradas.
+            ℹ Ausencia de datos: aún no hay comparaciones válidas con evaluaciones reales.
+            {stats.pendientes > 0 && ` Hay ${stats.pendientes} clasificaciones pendientes de revisar.`}
           </div>
         ) : (
           <>
             <PieCard data={data} colors={[S.verdeOsc, "#E53935"]}/>
             <div style={{ display:"grid", gridTemplateColumns:"repeat(3,1fr)", gap:12 }}>
               {[
-                { val:stats.total,                     label:"total validadas",  color:S.gris1    },
-                { val:`${stats.precision_pct ?? 0} %`, label:"precisión modelo", color:S.verdeOsc },
-                { val:stats.incorrectas ?? 0,          label:"erróneas",         color:"#E53935"  },
+                { val:stats.validas,                            label:"muestra (n)",            color:S.gris1    },
+                { val:`${stats.precision_preliminar_pct} %`,    label:"precisión preliminar",    color:S.verdeOsc },
+                { val:`${stats.tasa_discrepancias_pct} %`,      label:"tasa de discrepancias",   color:"#E53935"  },
               ].map((m,i) => (
                 <div key={i} style={{ ...card, textAlign:"center" }}>
                   <div style={{ fontSize:22, fontWeight:700, color:m.color }}>{m.val}</div>
@@ -801,6 +907,11 @@ function DashboardSupervisor() {
                 </div>
               ))}
             </div>
+            {stats.pendientes > 0 && (
+              <div style={{ fontSize:12, color:S.gris3 }}>
+                {stats.pendientes} clasificaciones aún pendientes de revisar (no se incluyen en el cálculo).
+              </div>
+            )}
           </>
         )}
       </div>
@@ -846,285 +957,6 @@ function Perfil({ role, onCambiar }) {
   );
 }
 
-function CapturaGaleria({ onClasificar }) {
-  const [origen,     setOrigen]     = useState("galeria");
-  const [preview,    setPreview]    = useState(null);
-  const [file,       setFile]       = useState(null);
-  const [loading,    setLoading]    = useState(false);
-  const [imgAnotada, setImgAnotada] = useState(null);
-  const [error,      setError]      = useState(null);
-  const [indeterminado, setIndeterminado] = useState(null);
-  const fileRef = useRef();
-
-  const handleFile = (f) => {
-    if (!f) return;
-    setError(null); setIndeterminado(null);
-    const err = validarArchivo(f);
-    if (err) { setError(err); setFile(null); setPreview(null); return; }
-    setFile(f); setImgAnotada(null);
-    const r = new FileReader(); r.onload = e => setPreview(e.target.result); r.readAsDataURL(f);
-  };
-
-  const handleClasificar = async () => {
-    if (!file) return;
-    setLoading(true); setError(null); setIndeterminado(null);
-    let resultado = null;
-    try {
-      const fd = new FormData(); fd.append("file", file);
-      const res  = await fetch(`${API}/predict`, { method:"POST", body:fd });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        setError(err?.detail || "No se pudo procesar la imagen.");
-        setLoading(false);
-        return;
-      }
-      const data = await res.json();
-      resultado  = data.resultado;
-    } catch(_) {}
-    if (!resultado) {
-      resultado = {
-        variedad:"Timpson", categoria:"CAT 1", categoria_label:"Categoría 1",
-        confianza:0.886, confianza_pct:"88.6 %", aprobado_exportacion:true,
-        criterios_cumplidos:["Color: Verde claro uniforme","Tamaño de baya: Grande","Compactación: Óptima","Pedicelo: Fresco"],
-        defectos:[
-          {nombre:"Mancha leve",estado:"No detectada",color:"#2E7D4F"},
-          {nombre:"Variación de color",estado:"No detectada",color:"#2E7D4F"},
-          {nombre:"Raste severo",estado:"No detectado",color:"#2E7D4F"},
-        ],
-        imagen_anotada:null,
-      };
-    }
-    if (resultado.indeterminado) {
-      setIndeterminado(resultado);
-      setLoading(false);
-      return;
-    }
-    if (resultado.imagen_anotada) {
-      setImgAnotada(resultado.imagen_anotada);
-      setLoading(false);
-      setTimeout(() => onClasificar(resultado), 1500);
-    } else {
-      setLoading(false);
-      onClasificar(resultado);
-    }
-  };
-
-  const otraImagen = () => {
-    setIndeterminado(null); setFile(null); setPreview(null); setError(null);
-  };
-
-  const toggleBtn = (sel, label) => {
-    const active = origen===sel;
-    return (
-      <button onClick={() => setOrigen(sel)} style={{
-        flex:1, height:44, borderRadius:8, fontSize:14, fontWeight:600,
-        fontFamily:"inherit", cursor:"pointer",
-        border:`1.5px solid ${active ? S.verdeOsc : S.borde}`,
-        background: active ? S.verdeOsc : S.blanco,
-        color: active ? "#fff" : S.gris1 }}>
-        {label}
-      </button>
-    );
-  };
-
-  return (
-    <div style={pageWrap}>
-      <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Captura de Imagen</h2>
-      <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-        <div>
-          <Label>Origen de imagen</Label>
-          <div style={{ display:"flex", gap:10, marginTop:6 }}>
-            {toggleBtn("camara","Cámara")}
-            {toggleBtn("galeria","Galería")}
-          </div>
-        </div>
-        {error && (
-          <div style={{ background:"#FFEBEE", borderRadius:8, padding:"10px 14px", color:"#C62828", fontSize:13, fontWeight:500 }}>
-            ⚠ {error}
-          </div>
-        )}
-        {indeterminado ? (
-          <TarjetaIndeterminado resultado={indeterminado} onReintentar={handleClasificar} onOtraImagen={otraImagen}/>
-        ) : (
-          <>
-            {loading ? (
-              <Spinner texto="Analizando con YOLOv8..." />
-            ) : (
-              <div onClick={() => !preview && fileRef.current.click()}
-                style={{ width:"100%", minHeight:280, borderRadius:12, overflow:"hidden",
-                  border:`2px dashed ${S.verdeOsc}`, background:"#f9f9f9",
-                  cursor: preview ? "default" : "pointer", display:"flex",
-                  alignItems:"center", justifyContent:"center" }}>
-                {imgAnotada
-                  ? <img src={imgAnotada} alt="anotada" style={{ width:"100%", maxHeight:420, objectFit:"contain", display:"block" }}/>
-                  : preview
-                    ? <img src={preview} alt="" style={{ width:"100%", maxHeight:420, objectFit:"cover", display:"block" }}/>
-                    : <div style={{ textAlign:"center", color:S.gris3, fontSize:15, padding:40 }}>
-                        <div style={{ fontSize:48, marginBottom:12 }}>🖼</div>
-                        Selecciona desde galería (JPG/PNG, máx. {TAMANO_MAXIMO_MB}MB)
-                      </div>
-                }
-              </div>
-            )}
-            <input ref={fileRef} type="file" accept="image/jpeg,image/png" style={{ display:"none" }}
-              onChange={e => handleFile(e.target.files[0])}/>
-            {!loading && !imgAnotada && (
-              <>
-                <button onClick={() => fileRef.current.click()}
-                  style={{ ...btn(), background:S.blanco, color:S.verdeOsc, border:`1.5px solid ${S.verdeOsc}` }}>
-                  📁 Seleccionar imagen
-                </button>
-                <button onClick={handleClasificar} disabled={!preview} style={btn({ opacity:!preview ? 0.5 : 1 })}>
-                  Usar imagen y clasificar
-                </button>
-              </>
-            )}
-            {imgAnotada && (
-              <div style={{ background:S.infoFondo, borderRadius:8, padding:"10px 14px", fontSize:13, color:S.infoTxt }}>
-                ✓ Detección completada — redirigiendo...
-              </div>
-            )}
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DeteccionDefectos({ resultado, onGuardar }) {
-  const confianza = resultado?.confianza || 0;
-  const defectos  = resultado?.defectos  || [];
-  const esCat1    = resultado?.aprobado_exportacion;
-  const [feedback,    setFeedback]    = useState(null);
-  const [guardando,   setGuardando]   = useState(false);
-  const [guardado,    setGuardado]    = useState(false);
-  const [observacion, setObservacion] = useState("");
-
-  const handleFeedback = (esCorrecta) => setFeedback(esCorrecta ? "correcto" : "incorrecto");
-
-  const handleGuardar = async () => {
-    if (feedback === null) return;
-    setGuardando(true);
-    try {
-      await fetch(`${API}/validaciones/feedback`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({
-          categoria_modelo: resultado?.categoria_label || "",
-          es_correcta: feedback === "correcto",
-          observacion,
-          confianza,
-        })
-      });
-    } catch(_) {}
-    setGuardando(false); setGuardado(true);
-    setTimeout(() => onGuardar(), 1000);
-  };
-
-  return (
-    <div style={pageWrap}>
-      <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Detección de Defectos</h2>
-      <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-        {resultado?.imagen_anotada && (
-          <div style={{ borderRadius:12, overflow:"hidden", border:`1px solid ${S.borde}` }}>
-            <img src={resultado.imagen_anotada} alt="detección"
-              style={{ width:"100%", display:"block", maxHeight:360, objectFit:"contain" }}/>
-          </div>
-        )}
-        <div style={{ ...card, display:"flex", gap:16, alignItems:"center" }}>
-          <div style={{ width:72, height:72, borderRadius:10,
-            background: esCat1 ? S.exito : S.ambar, flexShrink:0,
-            display:"flex", alignItems:"center", justifyContent:"center", fontSize:32 }}>🍇</div>
-          <div style={{ flex:1 }}>
-            <div style={{ fontSize:12, color:S.gris2 }}>Variedad detectada</div>
-            <div style={{ fontSize:15, fontWeight:600, color:S.gris1 }}>{resultado?.variedad || "Timpson"}</div>
-            <div style={{ fontSize:12, color:S.gris2, marginTop:6 }}>Categoría sugerida</div>
-            <div style={{ fontSize:22, fontWeight:700, color: esCat1 ? S.verdeOsc : "#B8860B" }}>
-              {resultado?.categoria_label || "—"}
-            </div>
-            <div style={{ fontSize:13, color:S.gris2 }}>
-              Confianza: {resultado?.confianza_pct || `${(confianza*100).toFixed(1)} %`}
-            </div>
-            <div style={{ marginTop:8, height:8, background:"#eee", borderRadius:4, overflow:"hidden" }}>
-              <div style={{ width:`${Math.round(confianza*100)}%`, height:"100%",
-                background: esCat1 ? S.verdeOsc : "#E9A800", borderRadius:4 }}/>
-            </div>
-          </div>
-        </div>
-        <div style={card}>
-          <div style={{ fontSize:15, fontWeight:600, color:S.gris1, marginBottom:12 }}>Defectos visuales detectados</div>
-          {defectos.map((d,i) => (
-            <div key={i} style={{ display:"flex", alignItems:"center", gap:12,
-              padding:"10px 0", borderBottom: i<defectos.length-1 ? `1px solid ${S.borde}` : "none" }}>
-              <div style={{ width:14, height:14, borderRadius:"50%", background:d.color, flexShrink:0 }}/>
-              <div>
-                <div style={{ fontSize:14, fontWeight:600, color:S.gris1 }}>{d.nombre}</div>
-                <div style={{ fontSize:13, color:S.gris2 }}>{d.estado}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-        <div style={card}>
-          <div style={{ fontSize:15, fontWeight:600, color:S.gris1, marginBottom:4 }}>¿La clasificación es correcta?</div>
-          <div style={{ fontSize:13, color:S.gris2, marginBottom:14 }}>Valida si el modelo clasificó correctamente este racimo</div>
-          <div style={{ display:"flex", gap:12 }}>
-            <button onClick={() => handleFeedback(true)}
-              style={{ flex:1, height:52, borderRadius:8, border:"none", cursor:"pointer",
-                fontSize:15, fontWeight:700,
-                background: feedback==="correcto" ? S.verdeOsc : S.verdeBadge,
-                color: feedback==="correcto" ? "#fff" : S.verdeOsc,
-                display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-              ✓ Correcto
-            </button>
-            <button onClick={() => handleFeedback(false)}
-              style={{ flex:1, height:52, borderRadius:8, border:"none", cursor:"pointer",
-                fontSize:15, fontWeight:700,
-                background: feedback==="incorrecto" ? "#C62828" : "#FFEBEE",
-                color: feedback==="incorrecto" ? "#fff" : "#C62828",
-                display:"flex", alignItems:"center", justifyContent:"center", gap:8 }}>
-              ✗ Incorrecto
-            </button>
-          </div>
-          {feedback === "incorrecto" && (
-            <div style={{ marginTop:12 }}>
-              <label style={{ fontSize:13, color:S.gris2 }}>Observación (opcional)</label>
-              <input value={observacion} onChange={e => setObservacion(e.target.value)}
-                placeholder="Ej: Era Categoría 1, no Categoría 2"
-                style={{ ...input, marginTop:6, fontSize:13 }}/>
-            </div>
-          )}
-        </div>
-        {guardado && (
-          <div style={{ background:S.exito, borderRadius:8, padding:"12px 16px",
-            color:S.verdeOsc, fontWeight:600, fontSize:14 }}>
-            ✓ Validación registrada correctamente
-          </div>
-        )}
-        <button onClick={handleGuardar} disabled={feedback===null||guardando||guardado}
-          style={btn({ opacity: feedback===null ? 0.5 : 1 })}>
-          {guardando ? "Guardando..." : guardado ? "Guardado ✓" : "Guardar validación"}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function ValidacionPacking({ onRegistrar }) {
-  return (
-    <div style={pageWrap}>
-      <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Resumen de Validaciones</h2>
-      <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
-        <div style={{ background:S.exito, borderRadius:8, padding:"14px 16px", color:S.verdeOsc, fontSize:13, fontWeight:600 }}>
-          ✓ Validación registrada correctamente.
-        </div>
-        <div style={{ fontSize:12, color:S.gris3 }}>
-          Consulta la precisión acumulada del modelo en el Dashboard.
-        </div>
-        <button onClick={onRegistrar} style={btn()}>📷 Clasificar otra imagen</button>
-      </div>
-    </div>
-  );
-}
-
 export default function App() {
   const [role,      setRole]      = useState(null);
   const [screen,    setScreen]    = useState("roleSelect");
@@ -1150,7 +982,7 @@ export default function App() {
       }).catch(() => {});
   }, []);
 
-  const navActive = ["registro","captura","resultado","captura2","defectos","validacion"].includes(screen)
+  const navActive = ["registro","captura","resultado","captura2"].includes(screen)
     ? "inicio"
     : ["historial","historialSupervisor"].includes(screen)
       ? "historial"
@@ -1164,15 +996,13 @@ export default function App() {
     historialSupervisor:"Historial de Validaciones",
     dashboard:"Dashboard",
     perfil:"Mi Perfil",
-    captura2:"Captura de Imagen",
-    defectos:"Detección de Defectos",
-    validacion:"Resumen de Validaciones",
+    captura2:"Cola de Revisión",
   };
 
-  const showBack = ["resultado","registro","defectos","validacion"].includes(screen);
+  const showBack = ["resultado","registro"].includes(screen);
 
   const goBack = () => {
-    const map = { resultado:"captura", registro:"captura", defectos:"captura2", validacion:"defectos" };
+    const map = { resultado:"captura", registro:"captura" };
     setScreen(map[screen] || "captura");
   };
 
@@ -1221,7 +1051,9 @@ export default function App() {
             loteId={loteData?.lote||""} fecha={fechaResultado} onGuardar={onGuardarResultado}/>
         )}
         {screen === "historial" && <Historial rows={historial}/>}
-        {screen === "historialSupervisor" && <HistorialSupervisor/>}
+        {screen === "historialSupervisor" && (
+          <RevisionClasificaciones estadoInicial="todas" titulo="Historial de Validaciones"/>
+        )}
         {screen === "dashboard" && (
           role === "supervisor" ? <DashboardSupervisor/> : <DashboardOperario/>
         )}
@@ -1229,13 +1061,7 @@ export default function App() {
           <Perfil role={role} onCambiar={() => { setRole(null); setScreen("roleSelect"); }}/>
         )}
         {screen === "captura2" && (
-          <CapturaGaleria onClasificar={r => { setResultado(r); setScreen("defectos"); }}/>
-        )}
-        {screen === "defectos" && (
-          <DeteccionDefectos resultado={resultado} onGuardar={() => setScreen("validacion")}/>
-        )}
-        {screen === "validacion" && (
-          <ValidacionPacking onRegistrar={() => setScreen("captura2")}/>
+          <RevisionClasificaciones estadoInicial="pendiente" titulo="Cola de Revisión"/>
         )}
       </div>
       <div style={{ borderTop:`1px solid ${S.borde}`, padding:16,
