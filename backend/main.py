@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
 import io, json, random, os, base64, uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -159,7 +159,7 @@ def subir_imagen(image_bytes: bytes, content_type: str) -> str:
         return ""
     try:
         ext = "png" if content_type == "image/png" else "jpg"
-        nombre = f"clasificaciones/{datetime.utcnow():%Y/%m}/{uuid.uuid4().hex}.{ext}"
+        nombre = f"clasificaciones/{datetime.now(timezone.utc):%Y/%m}/{uuid.uuid4().hex}.{ext}"
         bucket = gcs_client.bucket(GCS_BUCKET)
         blob = bucket.blob(nombre)
         blob.upload_from_string(image_bytes, content_type=content_type)
@@ -252,7 +252,7 @@ def clasificar_imagen(image_bytes: bytes, content_type: str = "image/jpeg") -> d
     if PIL_AVAILABLE:
         try:
             img = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB").resize((32,32))
-            pixels = list(img.getdata())
+            pixels = list(img.get_flattened_data())
             r = sum(p[0] for p in pixels)/len(pixels)
             g = sum(p[1] for p in pixels)/len(pixels)
             categoria = "cat1" if abs(r-g) > 20 else "cat2"

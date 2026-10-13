@@ -36,11 +36,11 @@ pytest
 Cubren la lógica de negocio sin depender de Supabase ni de una GPU:
 - `tests/test_validacion.py` — formato/tamaño/integridad de la imagen subida
 - `tests/test_clasificacion.py` — construcción del resultado (CAT1/CAT2/indeterminado) y las dos rutas de `clasificar_imagen` (YOLO real simulado con un modelo falso, y el fallback sin YOLO)
-- `tests/test_stats.py` — cálculo de precisión y detección de desviación (`/validaciones/stats`, `/clasificaciones/stats`), con la base de datos simulada (`unittest.mock`)
+- `tests/test_stats.py` — cálculo de la precisión preliminar y de los defectos del dashboard (`/validaciones/stats`, `/clasificaciones/stats`), con la base de datos simulada (`unittest.mock`)
 - `tests/test_api.py` — endpoints con `TestClient` de FastAPI
-- `tests/test_sprints.py` — **un test de aceptación por sprint** (1 a 4), cada uno verificando el criterio principal que ese sprint entregó; para correr solo estos: `pytest tests/test_sprints.py`
+- `tests/test_sprint1.py`, `tests/test_sprint2.py`, `tests/test_sprint3.py` — **pruebas de aceptación agrupadas por sprint** (uno por historia de usuario), trazando qué HU del Product Backlog quedó cubierta por cada sprint; para correr solo las de un sprint: `pytest tests/test_sprint1.py`
 
-> La asignación de HU a cada sprint en `test_sprints.py` se basa en lo discutido durante el desarrollo — antes de citarla en el informe de tesis, verifícala contra tu propia tabla de Épicas/HU/Sprint.
+> La asignación de HU a cada sprint en `tests/test_sprint*.py` viene del Product Backlog Base (Tabla 20) del informe de tesis. El Sprint 4 (HU011, HU012, HU015, HU016) queda fuera de esta entrega y no tiene archivo de pruebas.
 
 Al importar `main.py` vas a ver un aviso de "Error conectando a Supabase" si no tienes `backend/.env` configurado — es inofensivo, ningún test depende de la base de datos real.
 

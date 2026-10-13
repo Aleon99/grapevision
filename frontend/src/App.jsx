@@ -611,12 +611,6 @@ function Historial({ rows }) {
             </div>
           </div>
         )}
-        <button style={btn()}>
-          <svg width={16} height={16} viewBox="0 0 24 24" fill="none">
-            <path d="M6 3H15L19 7V21H6V3Z" stroke="#fff" strokeWidth={1.8} strokeLinejoin="round"/>
-          </svg>
-          Consultar historial completo
-        </button>
       </div>
     </div>
   );

@@ -1,4 +1,5 @@
 import io
+from unittest.mock import MagicMock
 
 import numpy as np
 from PIL import Image
@@ -54,3 +55,45 @@ class FakeYoloModel:
 
     def predict(self, *args, **kwargs):
         return [FakeYoloResult(self._boxes)]
+
+
+def mock_db_sequence(monkeypatch, main, fetchone_side_effect=None, fetchall_return=None):
+    """Reemplaza main.get_db() por una conexión falsa que devuelve los valores indicados, y permite inspeccionar las sentencias SQL ejecutadas."""
+    fake_cursor = MagicMock()
+    if fetchone_side_effect is not None:
+        fake_cursor.fetchone.side_effect = fetchone_side_effect
+    fake_cursor.fetchall.return_value = fetchall_return or []
+    fake_conn = MagicMock()
+    fake_conn.cursor.return_value = fake_cursor
+    monkeypatch.setattr(main, "get_db", lambda: fake_conn)
+    return fake_cursor
+
+
+# ── Dobles de prueba para simular Cloud Storage sin credenciales reales ──
+
+class FakeGcsBlob:
+    def __init__(self):
+        self.uploaded_bytes = None
+        self.content_type = None
+
+    def upload_from_string(self, data, content_type):
+        self.uploaded_bytes = data
+        self.content_type = content_type
+
+
+class FakeGcsBucket:
+    def __init__(self):
+        self.blobs = {}
+
+    def blob(self, name):
+        blob = FakeGcsBlob()
+        self.blobs[name] = blob
+        return blob
+
+
+class FakeGcsClient:
+    def __init__(self):
+        self.bucket_obj = FakeGcsBucket()
+
+    def bucket(self, name):
+        return self.bucket_obj
