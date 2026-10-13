@@ -969,7 +969,7 @@ export default function App() {
             categoria: r.categoria,
             confianza: `${(r.confianza*100).toFixed(1)} %`,
             fecha:     new Date(r.created_at + "Z").toLocaleDateString("es-PE") + " " +
-                       new Date(r.created_at + "Z").toLocaleTimeString("es-PE",{hour:"2-digit",minute:"2-digit"}),
+                       new Date(r.created_at + "Z").toLocaleTimeString("es-PE",{hour:"2-digit",minute:"2-digit",hour12:false}),
             tipo:      r.aprobado_exportacion ? "cat1" : "cat2",
           })));
         }
@@ -1013,7 +1013,7 @@ export default function App() {
         categoria: resultado.categoria_label,
         confianza: resultado.confianza_pct || `${(resultado.confianza*100).toFixed(1)} %`,
         fecha: new Date().toLocaleDateString("es-PE") + " " +
-               new Date().toLocaleTimeString("es-PE",{hour:"2-digit",minute:"2-digit"}),
+               new Date().toLocaleTimeString("es-PE",{hour:"2-digit",minute:"2-digit",hour12:false}),
         tipo: resultado.aprobado_exportacion ? "cat1" : "cat2",
       }, ...h]);
     }
