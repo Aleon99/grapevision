@@ -6,6 +6,7 @@ Un test por historia de usuario (o por sub-comportamiento relevante de esa
 historia), como evidencia de trazabilidad Sprint -> HU -> código.
 """
 
+import psycopg2
 from fastapi.testclient import TestClient
 
 import main
@@ -32,6 +33,21 @@ def test_hu001_registra_la_informacion_del_lote_y_queda_disponible_para_consulta
 
     lotes = client.get("/lotes").json()
     assert any(l["lote_id"] == "L-2026-099" and l["fundo"] == "La Esperanza" for l in lotes)
+
+
+def test_hu001_no_permite_registrar_dos_lotes_con_el_mismo_lote_id(monkeypatch):
+    """HU001: el lote_id debe ser único — intentar registrar uno repetido devuelve un error claro (409), no un 500."""
+    fake_cursor = mock_db_sequence(monkeypatch, main)
+    fake_cursor.execute.side_effect = psycopg2.errors.UniqueViolation(
+        "duplicate key value violates unique constraint \"lotes_lote_id_unique\""
+    )
+
+    resp = client.post("/lotes", json={
+        "lote_id": "L-2026-001", "fundo": "Otro Fundo", "variedad": "Timpson",
+        "campana": "2026", "fecha": "2026-09-01",
+    })
+
+    assert resp.status_code == 409
 
 
 def test_hu002_captura_una_imagen_de_racimo_en_campo_y_el_sistema_la_recibe(monkeypatch):

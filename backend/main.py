@@ -97,6 +97,8 @@ def init_db():
         ALTER TABLE validaciones ADD COLUMN IF NOT EXISTS clasificacion_id INTEGER REFERENCES clasificaciones(id);
         ALTER TABLE validaciones ADD COLUMN IF NOT EXISTS autor TEXT;
 
+        CREATE UNIQUE INDEX IF NOT EXISTS lotes_lote_id_unique ON lotes(lote_id);
+
         CREATE TABLE IF NOT EXISTS usuarios (
             id            SERIAL PRIMARY KEY,
             username      TEXT UNIQUE NOT NULL,
@@ -416,10 +418,16 @@ def login(data: LoginIn):
 @app.post("/lotes", status_code=201)
 def crear_lote(data: LoteIn):
     conn = get_db(); cur = conn.cursor()
-    cur.execute("INSERT INTO lotes (lote_id,fundo,variedad,campana,fecha,perfil) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
-        (data.lote_id,data.fundo,data.variedad,data.campana,data.fecha,data.perfil))
-    row_id = cur.fetchone()["id"]
-    conn.commit(); cur.close(); conn.close()
+    try:
+        cur.execute("INSERT INTO lotes (lote_id,fundo,variedad,campana,fecha,perfil) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+            (data.lote_id,data.fundo,data.variedad,data.campana,data.fecha,data.perfil))
+        row_id = cur.fetchone()["id"]
+        conn.commit()
+    except psycopg2.errors.UniqueViolation:
+        conn.rollback()
+        raise HTTPException(409, f"Ya existe un lote registrado con el ID {data.lote_id}.")
+    finally:
+        cur.close(); conn.close()
     return {"id":row_id,"lote_id":data.lote_id,"message":"Lote registrado"}
 
 @app.get("/lotes")
