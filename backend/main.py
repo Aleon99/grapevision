@@ -1,11 +1,14 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Header, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
-import io, json, random, os, base64, uuid
-from datetime import datetime, timezone
+import io, json, random, os, base64, uuid, csv
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
+import jwt, bcrypt
 load_dotenv()
+
+JWT_SECRET = os.environ.get("JWT_SECRET", "dev-only-secret-not-for-production")
 
 try:
     from google.cloud import storage as gcs_storage
@@ -92,8 +95,66 @@ def init_db():
         ALTER TABLE validaciones ALTER COLUMN lote_id DROP NOT NULL;
         ALTER TABLE validaciones ADD COLUMN IF NOT EXISTS confianza REAL;
         ALTER TABLE validaciones ADD COLUMN IF NOT EXISTS clasificacion_id INTEGER REFERENCES clasificaciones(id);
+        ALTER TABLE validaciones ADD COLUMN IF NOT EXISTS autor TEXT;
+
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id            SERIAL PRIMARY KEY,
+            username      TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            rol           TEXT NOT NULL,
+            nombre        TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS intentos_no_autorizados (
+            id            SERIAL PRIMARY KEY,
+            endpoint      TEXT,
+            rol_esperado  TEXT,
+            rol_recibido  TEXT,
+            created_at    TIMESTAMP DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS modelo_versiones (
+            id                  SERIAL PRIMARY KEY,
+            nombre_version      TEXT NOT NULL,
+            fecha_registro      TIMESTAMP DEFAULT NOW(),
+            dataset_manifiesto  TEXT,
+            precision_pct       REAL,
+            recall_pct          REAL,
+            map50_pct           REAL,
+            map50_95_pct        REAL,
+            estado              TEXT DEFAULT 'candidato',
+            veredicto           TEXT,
+            notas               TEXT
+        );
     """)
     conn.commit()
+
+    # Seed de cuentas demo (idempotente) — HU012/HU015 necesitan usuarios reales para
+    # verificar autorización y autoría, no solo el selector de rol del frontend.
+    cur.execute("SELECT COUNT(*) as n FROM usuarios")
+    if cur.fetchone()["n"] == 0:
+        for username, password, rol, nombre in [
+            ("operario1",   "Operario2026!",   "operario",   "Operario de Calidad en Campo"),
+            ("supervisor1", "Supervisor2026!", "supervisor", "Supervisor de Control de Calidad"),
+        ]:
+            pw_hash = bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+            cur.execute("""INSERT INTO usuarios (username,password_hash,rol,nombre) VALUES (%s,%s,%s,%s)
+                ON CONFLICT (username) DO NOTHING""", (username, pw_hash, rol, nombre))
+        conn.commit()
+
+    # Seed de la versión de modelo actualmente activa (best.pt en producción), para
+    # tener una base real contra la cual comparar futuras versiones candidatas.
+    cur.execute("SELECT COUNT(*) as n FROM modelo_versiones")
+    if cur.fetchone()["n"] == 0:
+        cur.execute("""INSERT INTO modelo_versiones
+            (nombre_version, fecha_registro, dataset_manifiesto, precision_pct, recall_pct, map50_pct, map50_95_pct, estado, veredicto, notas)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,'activo',%s,%s)""",
+            ("yolov8n-v1-20260713", "2026-07-13 00:00:00",
+             "Fine-tuning de YOLOv8n sobre imágenes propias de racimos, mejor punto de validación en la época 33.",
+             85.9, 99.1, 99.5, 87.4, "base",
+             "Versión actualmente desplegada en producción (backend/best.pt)."))
+        conn.commit()
+
     cur.close()
     conn.close()
 
@@ -115,7 +176,44 @@ class LoteIn(BaseModel):
 class FeedbackIn(BaseModel):
     clasificacion_id: int
     es_correcta: bool
-    observacion: Optional[str] = ""
+    observacion: Optional[str] = Field(default="", max_length=500)
+
+class LoginIn(BaseModel):
+    username: str
+    password: str
+
+class ModeloVersionIn(BaseModel):
+    nombre_version: str
+    dataset_manifiesto: Optional[str] = ""
+    precision_pct: float
+    recall_pct: float
+    map50_pct: float
+    map50_95_pct: float
+    notas: Optional[str] = ""
+
+# ── AUTENTICACIÓN (HU012/HU015) ─────────────────────────────────────────────────
+def get_current_user(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "Token de autenticación requerido.")
+    token = authorization.removeprefix("Bearer ").strip()
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=["HS256"])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(401, "El token expiró, vuelve a iniciar sesión.")
+    except jwt.InvalidTokenError:
+        raise HTTPException(401, "Token inválido.")
+    return {"username": payload["sub"], "rol": payload["rol"]}
+
+def require_role(rol_requerido: str):
+    def dependency(request: Request, current_user: dict = Depends(get_current_user)):
+        if current_user["rol"] != rol_requerido:
+            conn = get_db(); cur = conn.cursor()
+            cur.execute("""INSERT INTO intentos_no_autorizados (endpoint, rol_esperado, rol_recibido)
+                VALUES (%s,%s,%s)""", (request.url.path, rol_requerido, current_user["rol"]))
+            conn.commit(); cur.close(); conn.close()
+            raise HTTPException(403, "No tienes permisos para esta acción.")
+        return current_user
+    return dependency
 
 # ── CONSTANTES ────────────────────────────────────────────────────────────────
 CRITERIOS = {
@@ -302,6 +400,19 @@ def _build_result_indeterminado(confianza=None, imagen_anotada=None):
 def health():
     return {"status":"ok","yolo":YOLO_AVAILABLE,"opencv":CV2_AVAILABLE}
 
+@app.post("/auth/login")
+def login(data: LoginIn):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT username, password_hash, rol, nombre FROM usuarios WHERE username = %s", (data.username,))
+    user = cur.fetchone()
+    cur.close(); conn.close()
+    if not user or not bcrypt.checkpw(data.password.encode(), user["password_hash"].encode()):
+        raise HTTPException(401, "Usuario o contraseña incorrectos.")
+    payload = {"sub": user["username"], "rol": user["rol"],
+               "exp": datetime.now(timezone.utc) + timedelta(hours=24)}
+    token = jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+    return {"token": token, "rol": user["rol"], "username": user["username"], "nombre": user["nombre"]}
+
 @app.post("/lotes", status_code=201)
 def crear_lote(data: LoteIn):
     conn = get_db(); cur = conn.cursor()
@@ -402,7 +513,7 @@ def listar_para_revision(estado:str="todas", fecha_desde:str="", fecha_hasta:str
     cur.execute(f"""
         SELECT c.id, c.lote_id, c.variedad, c.categoria, c.confianza, c.imagen_url,
                c.fecha_inspeccion, c.created_at,
-               v.id as validacion_id, v.es_correcta, v.observacion
+               v.id as validacion_id, v.es_correcta, v.observacion, v.autor
         FROM clasificaciones c
         LEFT JOIN validaciones v ON v.clasificacion_id = c.id
         WHERE {where_sql}
@@ -421,9 +532,9 @@ def listar_para_revision(estado:str="todas", fecha_desde:str="", fecha_hasta:str
         result.append(d)
     return result
 
-# ── FEEDBACK SUPERVISOR (HU013) ────────────────────────────────────────────────
+# ── FEEDBACK SUPERVISOR (HU013/HU015) ───────────────────────────────────────────
 @app.post("/validaciones/feedback", status_code=201)
-def guardar_feedback(data: FeedbackIn):
+def guardar_feedback(data: FeedbackIn, current_user: dict = Depends(require_role("supervisor"))):
     conn = get_db(); cur = conn.cursor()
     cur.execute("SELECT categoria, confianza, lote_id FROM clasificaciones WHERE id = %s", (data.clasificacion_id,))
     clasificacion = cur.fetchone()
@@ -434,14 +545,14 @@ def guardar_feedback(data: FeedbackIn):
     cur.execute("SELECT id FROM validaciones WHERE clasificacion_id = %s", (data.clasificacion_id,))
     existente = cur.fetchone()
     if existente:
-        cur.execute("""UPDATE validaciones SET es_correcta=%s, observacion=%s WHERE id=%s RETURNING id""",
-            (data.es_correcta, data.observacion, existente["id"]))
+        cur.execute("""UPDATE validaciones SET es_correcta=%s, observacion=%s, autor=%s WHERE id=%s RETURNING id""",
+            (data.es_correcta, data.observacion, current_user["username"], existente["id"]))
     else:
         cur.execute("""INSERT INTO validaciones
-            (lote_id, categoria_modelo, es_correcta, observacion, confianza, clasificacion_id)
-            VALUES (%s,%s,%s,%s,%s,%s) RETURNING id""",
+            (lote_id, categoria_modelo, es_correcta, observacion, confianza, clasificacion_id, autor)
+            VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id""",
             (clasificacion["lote_id"], clasificacion["categoria"], data.es_correcta,
-             data.observacion, clasificacion["confianza"], data.clasificacion_id))
+             data.observacion, clasificacion["confianza"], data.clasificacion_id, current_user["username"]))
     row_id = cur.fetchone()["id"]
     conn.commit(); cur.close(); conn.close()
     return {"id":row_id,"message":"Feedback registrado"}
@@ -477,6 +588,159 @@ def stats_validaciones():
             "precision_preliminar_pct":precision_preliminar_pct,
             "tasa_discrepancias_pct":tasa_discrepancias_pct,
             "tiene_datos":tiene_datos}
+
+@app.get("/validaciones/stats/avanzado")
+def stats_validaciones_avanzado(campana:str="", lote_id:str="", fecha_desde:str="", fecha_hasta:str=""):
+    """HU011: dashboard avanzado de métricas, filtrable por campaña, lote y periodo (fecha)."""
+    condiciones = ["c.perfil='operario'"]
+    params = []
+    if lote_id:
+        condiciones.append("c.lote_id = %s"); params.append(lote_id)
+    if campana:
+        # Subconsulta en vez de JOIN: lotes.lote_id no es único (hay lotes duplicados
+        # en producción), y un JOIN directo multiplicaría las clasificaciones de ese lote.
+        condiciones.append("c.lote_id IN (SELECT lote_id FROM lotes WHERE campana = %s)"); params.append(campana)
+    if fecha_desde:
+        condiciones.append("c.fecha_inspeccion >= %s"); params.append(fecha_desde)
+    if fecha_hasta:
+        condiciones.append("c.fecha_inspeccion <= %s"); params.append(fecha_hasta)
+    where_sql = " AND ".join(condiciones)
+
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(f"""
+        SELECT COUNT(*) as total FROM clasificaciones c
+        WHERE {where_sql}
+    """, params)
+    total = cur.fetchone()["total"]
+
+    cur.execute(f"""
+        SELECT COUNT(*) as validas,
+               COUNT(*) FILTER (WHERE v.es_correcta = true)  as coincidencias,
+               COUNT(*) FILTER (WHERE v.es_correcta = false) as discrepancias
+        FROM clasificaciones c
+        JOIN validaciones v ON v.clasificacion_id = c.id
+        WHERE {where_sql}
+    """, params)
+    row = cur.fetchone()
+    cur.close(); conn.close()
+
+    validas = row["validas"]
+    coincidencias = row["coincidencias"]
+    discrepancias = row["discrepancias"]
+    pendientes = total - validas
+
+    tiene_datos = validas > 0
+    precision_preliminar_pct = round((coincidencias/validas*100),1) if tiene_datos else None
+    tasa_discrepancias_pct   = round((discrepancias/validas*100),1) if tiene_datos else None
+
+    return {"total":total, "validas":validas, "pendientes":pendientes,
+            "coincidencias":coincidencias, "discrepancias":discrepancias,
+            "precision_preliminar_pct":precision_preliminar_pct,
+            "tasa_discrepancias_pct":tasa_discrepancias_pct,
+            "tiene_datos":tiene_datos,
+            "filtros":{"campana":campana,"lote_id":lote_id,"fecha_desde":fecha_desde,"fecha_hasta":fecha_hasta}}
+
+# ── EXPORTACIÓN (HU012) ─────────────────────────────────────────────────────────
+def _csv_seguro(valor):
+    """Antepone un apóstrofo a cualquier valor que empiece como fórmula (=, +, -, @) para evitar CSV injection."""
+    s = "" if valor is None else str(valor)
+    if s and s[0] in ("=", "+", "-", "@"):
+        return "'" + s
+    return s
+
+@app.get("/clasificaciones/exportar")
+def exportar_clasificaciones(estado:str="todas", fecha_desde:str="", fecha_hasta:str="",
+    lote_id:str="", campana:str="", current_user: dict = Depends(require_role("supervisor"))):
+    """HU012: exporta a CSV las clasificaciones filtradas por periodo/campaña/lote, restringido a supervisores."""
+    condiciones = ["c.perfil = 'operario'"]
+    params = []
+    if fecha_desde:
+        condiciones.append("c.fecha_inspeccion >= %s"); params.append(fecha_desde)
+    if fecha_hasta:
+        condiciones.append("c.fecha_inspeccion <= %s"); params.append(fecha_hasta)
+    if lote_id:
+        condiciones.append("c.lote_id = %s"); params.append(lote_id)
+    if campana:
+        condiciones.append("c.lote_id IN (SELECT lote_id FROM lotes WHERE campana = %s)"); params.append(campana)
+    if estado == "pendiente":
+        condiciones.append("v.id IS NULL")
+    elif estado == "coincidencia":
+        condiciones.append("v.es_correcta = true")
+    elif estado == "discrepancia":
+        condiciones.append("v.es_correcta = false")
+    where_sql = " AND ".join(condiciones)
+
+    conn = get_db(); cur = conn.cursor()
+    cur.execute(f"""
+        SELECT c.id, c.lote_id,
+               (SELECT campana FROM lotes WHERE lote_id = c.lote_id LIMIT 1) as campana,
+               c.variedad, c.categoria, c.confianza,
+               c.fecha_inspeccion, v.id as validacion_id, v.es_correcta, c.created_at
+        FROM clasificaciones c
+        LEFT JOIN validaciones v ON v.clasificacion_id = c.id
+        WHERE {where_sql}
+        ORDER BY c.created_at DESC
+    """, params)
+    rows = cur.fetchall(); cur.close(); conn.close()
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["id","lote_id","campana","variedad","categoria","confianza","fecha_inspeccion","estado","created_at"])
+    for r in rows:
+        estado_fila = "pendiente" if r["validacion_id"] is None else ("coincidencia" if r["es_correcta"] else "discrepancia")
+        writer.writerow([_csv_seguro(r["id"]), _csv_seguro(r["lote_id"]), _csv_seguro(r["campana"]),
+            _csv_seguro(r["variedad"]), _csv_seguro(r["categoria"]), _csv_seguro(r["confianza"]),
+            _csv_seguro(r["fecha_inspeccion"]), _csv_seguro(estado_fila), _csv_seguro(r["created_at"])])
+
+    return Response(content=buf.getvalue(), media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=clasificaciones.csv"})
+
+# ── VERSIONES DEL MODELO (HU016) ────────────────────────────────────────────────
+@app.post("/modelo/versiones", status_code=201)
+def registrar_version_modelo(data: ModeloVersionIn, current_user: dict = Depends(require_role("supervisor"))):
+    """HU016: registra una versión candidata del modelo y la contrasta contra la versión activa (sin reentrenar)."""
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT map50_95_pct FROM modelo_versiones WHERE estado='activo' ORDER BY id DESC LIMIT 1")
+    activa = cur.fetchone()
+
+    if not activa:
+        veredicto = "sin_base"
+    elif data.map50_95_pct > activa["map50_95_pct"]:
+        veredicto = "mejora"
+    elif data.map50_95_pct < activa["map50_95_pct"]:
+        veredicto = "regresión"
+    else:
+        veredicto = "igual"
+
+    cur.execute("""INSERT INTO modelo_versiones
+        (nombre_version, dataset_manifiesto, precision_pct, recall_pct, map50_pct, map50_95_pct, estado, veredicto, notas)
+        VALUES (%s,%s,%s,%s,%s,%s,'candidato',%s,%s) RETURNING id""",
+        (data.nombre_version, data.dataset_manifiesto, data.precision_pct, data.recall_pct,
+         data.map50_pct, data.map50_95_pct, veredicto, data.notas))
+    row_id = cur.fetchone()["id"]
+    conn.commit(); cur.close(); conn.close()
+    return {"id": row_id, "veredicto": veredicto, "message": "Versión candidata registrada"}
+
+@app.get("/modelo/versiones")
+def listar_versiones_modelo():
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT * FROM modelo_versiones ORDER BY fecha_registro DESC, id DESC")
+    rows = cur.fetchall(); cur.close(); conn.close()
+    return [dict(r) for r in rows]
+
+@app.post("/modelo/versiones/{version_id}/activar")
+def activar_version_modelo(version_id: int, current_user: dict = Depends(require_role("supervisor"))):
+    """HU016: activa una versión; activar una versión anterior sirve como mecanismo de reversión.
+    No reemplaza el best.pt que corre en producción — por eso nunca afecta la API de clasificación."""
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT id FROM modelo_versiones WHERE id=%s", (version_id,))
+    if not cur.fetchone():
+        cur.close(); conn.close()
+        raise HTTPException(404, "La versión indicada no existe.")
+    cur.execute("UPDATE modelo_versiones SET estado='anterior' WHERE estado='activo'")
+    cur.execute("UPDATE modelo_versiones SET estado='activo' WHERE id=%s", (version_id,))
+    conn.commit(); cur.close(); conn.close()
+    return {"message": "Versión activada"}
 
 @app.get("/validaciones")
 def listar_validaciones(limit:int=50):

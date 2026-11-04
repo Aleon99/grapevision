@@ -3,6 +3,10 @@ import { PieChart, Pie, Cell, Tooltip, Legend, ResponsiveContainer } from "recha
 
 const API = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
+function authFetch(url, token, opts={}) {
+  return fetch(url, { ...opts, headers: { ...(opts.headers||{}), Authorization: `Bearer ${token}` } });
+}
+
 const HISTORIAL_INICIAL = [
   { lote:"L-2026-015", categoria:"Categoría 1", confianza:"91.8 %", fecha:"05/06/2026 11:26", tipo:"cat1" },
   { lote:"L-2026-014", categoria:"Categoría 2", confianza:"87.4 %", fecha:"05/06/2026 10:48", tipo:"cat2" },
@@ -116,10 +120,31 @@ function Label({ children, required }) {
   );
 }
 
-function RoleSelect({ onSelect }) {
+function Login({ onLogin }) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(""); setLoading(true);
+    try {
+      const res = await fetch(`${API}/auth/login`, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ username, password }),
+      });
+      if (!res.ok) { setError("Usuario o contraseña incorrectos."); return; }
+      const data = await res.json();
+      onLogin(data);
+    } catch {
+      setError("No se pudo conectar con el servidor.");
+    } finally { setLoading(false); }
+  };
+
   return (
-    <div style={{ ...pageWrap, maxWidth:480, display:"flex",
-      flexDirection:"column", alignItems:"center", gap:36, paddingTop:60 }}>
+    <div style={{ ...pageWrap, maxWidth:420, display:"flex",
+      flexDirection:"column", alignItems:"center", gap:32, paddingTop:60 }}>
       <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>
         <div style={{ width:72, height:72, borderRadius:18, background:S.verdeOsc,
           display:"flex", alignItems:"center", justifyContent:"center", fontSize:32 }}>🍇</div>
@@ -127,28 +152,26 @@ function RoleSelect({ onSelect }) {
         <div style={{ fontSize:15, color:S.gris2 }}>Sistema de Clasificación de Uva</div>
         <div style={{ fontSize:13, color:S.gris3 }}>AGROEXPORT S.A.</div>
       </div>
-      <div style={{ width:"100%", display:"flex", flexDirection:"column", gap:14 }}>
-        <div style={{ fontSize:14, fontWeight:600, color:S.gris2, textAlign:"center" }}>
-          Selecciona tu perfil
+      <form onSubmit={handleSubmit} style={{ width:"100%", display:"flex", flexDirection:"column", gap:14 }}>
+        <div>
+          <Label>Usuario</Label>
+          <input value={username} onChange={e => setUsername(e.target.value)}
+            autoComplete="username" style={{ ...input, marginTop:6 }}/>
         </div>
-        {[
-          { role:"operario",   title:"Operario de Campo",     emoji:"👷",
-            desc:"Registra lotes, captura imágenes y consulta resultados" },
-          { role:"supervisor", title:"Supervisor de Calidad",  emoji:"🔍",
-            desc:"Valida clasificaciones y revisa defectos visuales" },
-        ].map(r => (
-          <button key={r.role} onClick={() => onSelect(r.role)}
-            style={{ width:"100%", background:S.blanco, border:`1.5px solid ${S.borde}`,
-              borderRadius:12, padding:"18px 20px", cursor:"pointer", textAlign:"left",
-              display:"flex", alignItems:"center", gap:16 }}>
-            <div style={{ fontSize:28 }}>{r.emoji}</div>
-            <div>
-              <div style={{ fontSize:16, fontWeight:600, color:S.gris1 }}>{r.title}</div>
-              <div style={{ fontSize:13, color:S.gris2, marginTop:2 }}>{r.desc}</div>
-            </div>
-          </button>
-        ))}
-      </div>
+        <div>
+          <Label>Contraseña</Label>
+          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+            autoComplete="current-password" style={{ ...input, marginTop:6 }}/>
+        </div>
+        {error && (
+          <div style={{ background:"#FFEBEE", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#C62828" }}>
+            {error}
+          </div>
+        )}
+        <button type="submit" disabled={loading || !username || !password} style={btn()}>
+          {loading ? "Ingresando..." : "Ingresar"}
+        </button>
+      </form>
     </div>
   );
 }
@@ -622,23 +645,32 @@ const ESTADO_INFO = {
   discrepancia: { label:"Discrepancia", bg:"#FFEBEE",    color:"#C62828" },
 };
 
-function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión de Clasificaciones" }) {
+function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión de Clasificaciones", auth }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [estado, setEstado] = useState(estadoInicial);
   const [lote, setLote] = useState("");
+  const [campana, setCampana] = useState("");
   const [fechaDesde, setFechaDesde] = useState("");
   const [fechaHasta, setFechaHasta] = useState("");
   const [seleccionado, setSeleccionado] = useState(null);
   const [observacion, setObservacion] = useState("");
   const [guardando, setGuardando] = useState(false);
+  const [exportando, setExportando] = useState(false);
+
+  const filtrosActuales = () => {
+    const params = new URLSearchParams({ estado });
+    if (lote) params.set("lote_id", lote);
+    if (campana) params.set("campana", campana);
+    if (fechaDesde) params.set("fecha_desde", fechaDesde);
+    if (fechaHasta) params.set("fecha_hasta", fechaHasta);
+    return params;
+  };
 
   const cargar = () => {
     setLoading(true);
-    const params = new URLSearchParams({ estado, limit:"50" });
-    if (lote) params.set("lote_id", lote);
-    if (fechaDesde) params.set("fecha_desde", fechaDesde);
-    if (fechaHasta) params.set("fecha_hasta", fechaHasta);
+    const params = filtrosActuales();
+    params.set("limit", "50");
     fetch(`${API}/clasificaciones/revision?${params}`)
       .then(r => r.json())
       .then(data => { setRows(Array.isArray(data) ? data : []); setLoading(false); })
@@ -654,13 +686,27 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
     if (!seleccionado) return;
     setGuardando(true);
     try {
-      await fetch(`${API}/validaciones/feedback`, {
+      await authFetch(`${API}/validaciones/feedback`, auth.token, {
         method:"POST", headers:{"Content-Type":"application/json"},
         body: JSON.stringify({ clasificacion_id: seleccionado.id, es_correcta: esCorrecta, observacion }),
       });
       cerrar();
       cargar();
     } finally { setGuardando(false); }
+  };
+
+  const handleExportar = async () => {
+    setExportando(true);
+    try {
+      const res = await authFetch(`${API}/clasificaciones/exportar?${filtrosActuales()}`, auth.token);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = "clasificaciones.csv";
+      document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    } finally { setExportando(false); }
   };
 
   if (seleccionado) {
@@ -697,10 +743,13 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
             ))}
           </div>
           <div>
-            <Label>Observación (opcional)</Label>
-            <textarea value={observacion} onChange={e => setObservacion(e.target.value)}
+            <Label>Observación (opcional, máx. 500 caracteres)</Label>
+            <textarea value={observacion} onChange={e => setObservacion(e.target.value.slice(0,500))}
               placeholder="Ej: el racimo real llegó como Categoría 1 a packing..."
               style={{ ...input, height:80, marginTop:6, resize:"vertical", paddingTop:10 }}/>
+            {seleccionado.autor && (
+              <div style={{ fontSize:12, color:S.gris3, marginTop:4 }}>Última observación de: {seleccionado.autor}</div>
+            )}
           </div>
           <div style={{ display:"flex", gap:10 }}>
             <button disabled={guardando} onClick={() => handleValidar(true)}
@@ -731,6 +780,8 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
           </select>
           <input placeholder="Filtrar por lote..." value={lote} onChange={e => setLote(e.target.value)}
             style={{ ...input, height:40, width:140 }}/>
+          <input placeholder="Campaña..." value={campana} onChange={e => setCampana(e.target.value)}
+            style={{ ...input, height:40, width:110 }}/>
           <input type="date" value={fechaDesde} onChange={e => setFechaDesde(e.target.value)}
             style={{ ...input, height:40, width:150 }}/>
           <input type="date" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)}
@@ -738,6 +789,10 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
           <button onClick={cargar} style={{ height:40, padding:"0 16px", borderRadius:8, border:"none",
             background:S.verdeOsc, color:"#fff", fontWeight:600, fontSize:13, cursor:"pointer" }}>
             Filtrar
+          </button>
+          <button onClick={handleExportar} disabled={exportando} style={{ height:40, padding:"0 16px", borderRadius:8,
+            border:`1px solid ${S.verdeOsc}`, background:S.blanco, color:S.verdeOsc, fontWeight:600, fontSize:13, cursor:"pointer" }}>
+            {exportando ? "Exportando..." : "⬇ Exportar CSV"}
           </button>
         </div>
         {loading ? (
@@ -858,13 +913,23 @@ function DashboardOperario() {
 
 function DashboardSupervisor() {
   const [stats, setStats] = useState(null);
+  const [campana, setCampana] = useState("");
+  const [lote, setLote] = useState("");
+  const [fechaDesde, setFechaDesde] = useState("");
+  const [fechaHasta, setFechaHasta] = useState("");
 
-  useEffect(() => {
-    fetch(`${API}/validaciones/stats`)
+  const cargar = () => {
+    const params = new URLSearchParams();
+    if (campana) params.set("campana", campana);
+    if (lote) params.set("lote_id", lote);
+    if (fechaDesde) params.set("fecha_desde", fechaDesde);
+    if (fechaHasta) params.set("fecha_hasta", fechaHasta);
+    fetch(`${API}/validaciones/stats/avanzado?${params}`)
       .then(r => r.json())
       .then(setStats)
       .catch(() => setStats({ total:0, validas:0, pendientes:0, coincidencias:0, discrepancias:0, precision_preliminar_pct:null, tasa_discrepancias_pct:null, tiene_datos:false }));
-  }, []);
+  };
+  useEffect(cargar, []);
 
   if (!stats) return (
     <div style={pageWrap}>
@@ -881,6 +946,20 @@ function DashboardSupervisor() {
     <div style={pageWrap}>
       <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Dashboard de Precisión</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+        <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
+          <input placeholder="Campaña..." value={campana} onChange={e => setCampana(e.target.value)}
+            style={{ ...input, height:40, width:110 }}/>
+          <input placeholder="Lote..." value={lote} onChange={e => setLote(e.target.value)}
+            style={{ ...input, height:40, width:130 }}/>
+          <input type="date" value={fechaDesde} onChange={e => setFechaDesde(e.target.value)}
+            style={{ ...input, height:40, width:150 }}/>
+          <input type="date" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)}
+            style={{ ...input, height:40, width:150 }}/>
+          <button onClick={cargar} style={{ height:40, padding:"0 16px", borderRadius:8, border:"none",
+            background:S.verdeOsc, color:"#fff", fontWeight:600, fontSize:13, cursor:"pointer" }}>
+            Filtrar
+          </button>
+        </div>
         {!stats.tiene_datos ? (
           <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
             ℹ Ausencia de datos: aún no hay comparaciones válidas con evaluaciones reales.
@@ -913,7 +992,7 @@ function DashboardSupervisor() {
   );
 }
 
-function Perfil({ role, onCambiar }) {
+function Perfil({ role, nombre, username, onCerrarSesion, onVerVersiones }) {
   const esOp = role==="operario";
   return (
     <div style={{ ...pageWrap, maxWidth:480 }}>
@@ -925,10 +1004,10 @@ function Perfil({ role, onCambiar }) {
         </div>
         <div style={{ textAlign:"center" }}>
           <div style={{ fontSize:20, fontWeight:600, color:S.gris1 }}>
-            {esOp ? "Operario de Calidad" : "Supervisor de Calidad"}
+            {nombre || (esOp ? "Operario de Calidad" : "Supervisor de Calidad")}
           </div>
           <div style={{ fontSize:14, color:S.gris2, marginTop:4 }}>
-            {esOp ? "Operario de Calidad en Campo" : "Control de Calidad"}
+            {username ? `@${username}` : (esOp ? "Operario de Calidad en Campo" : "Control de Calidad")}
           </div>
         </div>
         <div style={{ ...card, width:"100%" }}>
@@ -942,22 +1021,192 @@ function Perfil({ role, onCambiar }) {
             </div>
           ))}
         </div>
-        <button onClick={onCambiar} style={{ ...btn(), background:S.blanco,
+        {!esOp && (
+          <button onClick={onVerVersiones} style={{ ...btn(), background:S.blanco,
+            color:S.gris1, border:`1.5px solid ${S.borde}`, width:"100%" }}>
+            Versiones del modelo
+          </button>
+        )}
+        <button onClick={onCerrarSesion} style={{ ...btn(), background:S.blanco,
           color:S.verdeOsc, border:`1.5px solid ${S.verdeOsc}`, width:"100%" }}>
-          Cambiar de perfil
+          Cerrar sesión
         </button>
       </div>
     </div>
   );
 }
 
+const ESTADO_MODELO_INFO = {
+  activo:    { label:"Activo",    bg:S.verdeBadge, color:S.verdeOsc },
+  candidato: { label:"Candidato", bg:S.ambar,      color:S.ambarTxt },
+  anterior:  { label:"Anterior",  bg:"#F0F0F0",    color:S.gris2 },
+  base:      { label:"Base",      bg:"#F0F0F0",    color:S.gris2 },
+};
+const VEREDICTO_INFO = {
+  mejora:    { label:"Mejora",    color:S.verdeOsc },
+  "regresión": { label:"Regresión", color:"#C62828" },
+  igual:     { label:"Igual",     color:S.gris2 },
+  sin_base:  { label:"Sin base",  color:S.gris3 },
+};
+
+function VersionesModelo({ auth }) {
+  const [versiones, setVersiones] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [form, setForm] = useState({
+    nombre_version:"", dataset_manifiesto:"",
+    precision_pct:"", recall_pct:"", map50_pct:"", map50_95_pct:"", notas:"",
+  });
+  const [guardando, setGuardando] = useState(false);
+  const [error, setError] = useState("");
+  const upd = (k,v) => setForm(f => ({ ...f, [k]:v }));
+
+  const cargar = () => {
+    setLoading(true);
+    fetch(`${API}/modelo/versiones`)
+      .then(r => r.json())
+      .then(data => { setVersiones(Array.isArray(data) ? data : []); setLoading(false); })
+      .catch(() => setLoading(false));
+  };
+  useEffect(cargar, []);
+
+  const handleRegistrar = async (e) => {
+    e.preventDefault();
+    setError(""); setGuardando(true);
+    try {
+      const res = await authFetch(`${API}/modelo/versiones`, auth.token, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({
+          nombre_version: form.nombre_version,
+          dataset_manifiesto: form.dataset_manifiesto,
+          precision_pct: parseFloat(form.precision_pct),
+          recall_pct: parseFloat(form.recall_pct),
+          map50_pct: parseFloat(form.map50_pct),
+          map50_95_pct: parseFloat(form.map50_95_pct),
+          notas: form.notas,
+        }),
+      });
+      if (!res.ok) { setError("No se pudo registrar la versión."); return; }
+      setForm({ nombre_version:"", dataset_manifiesto:"", precision_pct:"", recall_pct:"", map50_pct:"", map50_95_pct:"", notas:"" });
+      cargar();
+    } finally { setGuardando(false); }
+  };
+
+  const handleActivar = async (id) => {
+    await authFetch(`${API}/modelo/versiones/${id}/activar`, auth.token, { method:"POST" });
+    cargar();
+  };
+
+  return (
+    <div style={pageWrap}>
+      <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Versiones del Modelo</h2>
+      <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
+        <div style={{ background:S.infoFondo, borderRadius:8, padding:"12px 14px", fontSize:13, color:S.infoTxt }}>
+          ℹ Registrar o activar una versión es solo un cambio de metadata trazable — no reemplaza el modelo
+          que corre en producción, por eso nunca afecta la clasificación en curso.
+        </div>
+
+        {loading ? (
+          <div style={{ textAlign:"center", padding:40, color:S.gris3 }}>Cargando...</div>
+        ) : (
+          <div style={{ display:"flex", flexDirection:"column", gap:10 }}>
+            {versiones.map(v => {
+              const e = ESTADO_MODELO_INFO[v.estado] || ESTADO_MODELO_INFO.anterior;
+              const vd = VEREDICTO_INFO[v.veredicto];
+              return (
+                <div key={v.id} style={card}>
+                  <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                    <span style={{ fontSize:14, fontWeight:600, color:S.gris1 }}>{v.nombre_version}</span>
+                    <span style={{ padding:"3px 10px", borderRadius:20, fontSize:11, fontWeight:600, background:e.bg, color:e.color }}>
+                      {e.label}
+                    </span>
+                  </div>
+                  <div style={{ fontSize:12, color:S.gris2, marginTop:6 }}>
+                    Precisión {v.precision_pct}% · Recall {v.recall_pct}% · mAP50 {v.map50_pct}% · mAP50-95 {v.map50_95_pct}%
+                    {vd && <> · <span style={{ color:vd.color, fontWeight:600 }}>{vd.label}</span></>}
+                  </div>
+                  {v.dataset_manifiesto && (
+                    <div style={{ fontSize:12, color:S.gris3, marginTop:4 }}>{v.dataset_manifiesto}</div>
+                  )}
+                  {v.estado !== "activo" && (
+                    <button onClick={() => handleActivar(v.id)} style={{ marginTop:10, height:34, padding:"0 14px",
+                      borderRadius:8, border:`1px solid ${S.verdeOsc}`, background:S.blanco, color:S.verdeOsc,
+                      fontWeight:600, fontSize:12, cursor:"pointer" }}>
+                      Activar esta versión
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <form onSubmit={handleRegistrar} style={{ ...card, display:"flex", flexDirection:"column", gap:12 }}>
+          <div style={{ fontSize:14, fontWeight:600, color:S.gris1 }}>Registrar versión candidata</div>
+          <div>
+            <Label>Nombre de la versión</Label>
+            <input value={form.nombre_version} onChange={e => upd("nombre_version", e.target.value)}
+              placeholder="ej. yolov8n-v2" style={{ ...input, marginTop:6 }} required/>
+          </div>
+          <div>
+            <Label>Manifiesto del dataset</Label>
+            <textarea value={form.dataset_manifiesto} onChange={e => upd("dataset_manifiesto", e.target.value)}
+              placeholder="origen de las imágenes, etiquetado, separación train/eval..."
+              style={{ ...input, height:70, marginTop:6, resize:"vertical", paddingTop:10 }}/>
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            {[["precision_pct","Precisión %"],["recall_pct","Recall %"],["map50_pct","mAP50 %"],["map50_95_pct","mAP50-95 %"]].map(([k,label]) => (
+              <div key={k}>
+                <Label>{label}</Label>
+                <input type="number" step="0.1" value={form[k]} onChange={e => upd(k, e.target.value)}
+                  style={{ ...input, marginTop:6 }} required/>
+              </div>
+            ))}
+          </div>
+          <div>
+            <Label>Notas</Label>
+            <input value={form.notas} onChange={e => upd("notas", e.target.value)}
+              style={{ ...input, marginTop:6 }}/>
+          </div>
+          {error && <div style={{ fontSize:12, color:"#C62828" }}>{error}</div>}
+          <button type="submit" disabled={guardando} style={btn()}>
+            {guardando ? "Registrando..." : "Registrar candidata"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+function cargarAuthGuardada() {
+  try {
+    const raw = sessionStorage.getItem("gv_auth");
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
 export default function App() {
-  const [role,      setRole]      = useState(null);
-  const [screen,    setScreen]    = useState("roleSelect");
+  const [auth,      setAuth]      = useState(cargarAuthGuardada);
+  const [role,      setRole]      = useState(() => cargarAuthGuardada()?.rol || null);
+  const [screen,    setScreen]    = useState(() => {
+    const a = cargarAuthGuardada();
+    return a ? (a.rol === "supervisor" ? "captura2" : "captura") : "roleSelect";
+  });
   const [loteData,  setLoteData]  = useState(null);
   const [fechaResultado, setFechaResultado] = useState(fechaHoy());
   const [resultado, setResultado] = useState(null);
   const [historial, setHistorial] = useState(HISTORIAL_INICIAL);
+
+  const handleLogin = (data) => {
+    setAuth(data); setRole(data.rol);
+    try { sessionStorage.setItem("gv_auth", JSON.stringify(data)); } catch {}
+    setScreen(data.rol === "supervisor" ? "captura2" : "captura");
+  };
+
+  const handleLogout = () => {
+    setAuth(null); setRole(null);
+    try { sessionStorage.removeItem("gv_auth"); } catch {}
+    setScreen("roleSelect");
+  };
 
   useEffect(() => {
     fetch(`${API}/clasificaciones?limit=20`)
@@ -980,7 +1229,9 @@ export default function App() {
     ? "inicio"
     : ["historial","historialSupervisor"].includes(screen)
       ? "historial"
-      : screen;
+      : ["versionesModelo"].includes(screen)
+        ? "perfil"
+        : screen;
 
   const HEADERS = {
     registro:"Registro de Lote",
@@ -991,12 +1242,13 @@ export default function App() {
     dashboard:"Dashboard",
     perfil:"Mi Perfil",
     captura2:"Cola de Revisión",
+    versionesModelo:"Versiones del Modelo",
   };
 
-  const showBack = ["resultado","registro"].includes(screen);
+  const showBack = ["resultado","registro","versionesModelo"].includes(screen);
 
   const goBack = () => {
-    const map = { resultado:"captura", registro:"captura" };
+    const map = { resultado:"captura", registro:"captura", versionesModelo:"perfil" };
     setScreen(map[screen] || "captura");
   };
 
@@ -1028,7 +1280,7 @@ export default function App() {
       )}
       <div>
         {screen === "roleSelect" && (
-          <RoleSelect onSelect={r => { setRole(r); setScreen(r==="supervisor" ? "captura2" : "captura"); }}/>
+          <Login onLogin={handleLogin}/>
         )}
         {screen === "registro" && (
           <RegistroLote onGuardar={d => { setLoteData(d); setScreen("captura"); }}/>
@@ -1046,17 +1298,19 @@ export default function App() {
         )}
         {screen === "historial" && <Historial rows={historial}/>}
         {screen === "historialSupervisor" && (
-          <RevisionClasificaciones estadoInicial="todas" titulo="Historial de Validaciones"/>
+          <RevisionClasificaciones estadoInicial="todas" titulo="Historial de Validaciones" auth={auth}/>
         )}
         {screen === "dashboard" && (
           role === "supervisor" ? <DashboardSupervisor/> : <DashboardOperario/>
         )}
         {screen === "perfil" && (
-          <Perfil role={role} onCambiar={() => { setRole(null); setScreen("roleSelect"); }}/>
+          <Perfil role={role} nombre={auth?.nombre} username={auth?.username}
+            onCerrarSesion={handleLogout} onVerVersiones={() => setScreen("versionesModelo")}/>
         )}
         {screen === "captura2" && (
-          <RevisionClasificaciones estadoInicial="pendiente" titulo="Cola de Revisión"/>
+          <RevisionClasificaciones estadoInicial="pendiente" titulo="Cola de Revisión" auth={auth}/>
         )}
+        {screen === "versionesModelo" && <VersionesModelo auth={auth}/>}
       </div>
       <div style={{ borderTop:`1px solid ${S.borde}`, padding:16,
         textAlign:"center", fontSize:12, color:S.gris3, marginTop:40 }}>
