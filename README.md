@@ -1,7 +1,7 @@
 # GrapeVision — AGROEXPORT S.A.
 
 Sistema de clasificación de uva de mesa con YOLOv8 (demo).
-Stack: React 19 + Vite · FastAPI · SQLite
+Stack: React 19 + Vite · FastAPI · PostgreSQL (Supabase) · Google Cloud Storage
 
 ---
 
