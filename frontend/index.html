@@ -5,10 +5,49 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>GrapeVision — AGROEXPORT S.A.</title>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet"/>
   <style>
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: 'Roboto', system-ui, sans-serif; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      font-family: 'Inter', system-ui, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    ::selection { background: #BBF0D2; color: #0B3D22; }
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #CBD5E1; border-radius: 20px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94A3B8; }
+
+    button, input, select, textarea { font-family: inherit; }
+    button { transition: transform .12s ease, filter .15s ease, box-shadow .15s ease, background .15s ease, border-color .15s ease; }
+    button:hover:not(:disabled) { filter: brightness(1.04); }
+    button:active:not(:disabled) { transform: translateY(1px) scale(0.99); }
+    button:disabled { cursor: not-allowed; opacity: .6; filter: none; }
+    button:focus-visible, a:focus-visible { outline: 2px solid #15803D; outline-offset: 2px; }
+
+    input, select, textarea {
+      transition: border-color .15s ease, box-shadow .15s ease;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none;
+      border-color: #15803D !important;
+      box-shadow: 0 0 0 3px rgba(21,128,61,0.14);
+    }
+
+    @keyframes gv-fade-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .gv-row-flat { transition: background .12s ease; }
+    .gv-row-flat:hover { background: #F6FAF8 !important; }
+
+    .gv-row-card { transition: transform .15s ease, box-shadow .15s ease; }
+    .gv-row-card:hover { transform: translateY(-2px); box-shadow: 0 8px 20px rgba(15,23,42,0.10); }
   </style>
 </head>
 <body>

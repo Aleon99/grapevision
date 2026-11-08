@@ -15,10 +15,16 @@ const HISTORIAL_INICIAL = [
 ];
 
 const S = {
-  verde:"#2E7D4F", verdeOsc:"#1E6B3C", fondoApp:"#F5F5F5",
-  blanco:"#FFFFFF", gris1:"#212121", gris2:"#616161", gris3:"#9E9E9E",
-  borde:"#E0E0E0", ambar:"#FFF3CD", ambarTxt:"#856404",
-  verdeBadge:"#D4EDDA", infoFondo:"#EBF4FF", infoTxt:"#1565C0", exito:"#E8F5EE",
+  verde:"#16A34A", verdeOsc:"#15803D", verdeOsc2:"#0F5C2C", verdeClaro:"#22C55E",
+  fondoApp:"#F4F7F5",
+  blanco:"#FFFFFF", gris1:"#0F172A", gris2:"#475569", gris3:"#94A3B8",
+  borde:"#E2E8F0", bordeSutil:"#EEF2F0",
+  ambar:"#FEF3C7", ambarTxt:"#92400E",
+  verdeBadge:"#DCFCE7", infoFondo:"#EFF6FF", infoTxt:"#1D4ED8", exito:"#ECFDF5",
+  rojo:"#DC2626", rojoBg:"#FEF2F2", rojoTxt:"#B91C1C",
+  sombra:"0 1px 2px rgba(15,23,42,0.04), 0 2px 8px rgba(15,23,42,0.06)",
+  sombraLg:"0 4px 12px rgba(15,23,42,0.08), 0 12px 32px rgba(15,23,42,0.08)",
+  gradiente:"linear-gradient(135deg, #15803D 0%, #16A34A 55%, #0E9668 100%)",
 };
 
 const DEFECTOS_CLIENTE = {
@@ -35,20 +41,21 @@ const DEFECTOS_CLIENTE = {
 };
 
 const btn = (extra={}) => ({
-  height:48, borderRadius:8, border:"none", background:S.verdeOsc,
+  height:48, borderRadius:10, border:"none", background:S.verdeOsc,
   color:"#fff", fontSize:15, fontWeight:600, fontFamily:"inherit",
   width:"100%", cursor:"pointer", display:"flex", alignItems:"center",
-  justifyContent:"center", gap:8, ...extra
+  justifyContent:"center", gap:8, boxShadow:S.sombra,
+  letterSpacing:0.1, ...extra
 });
 
 const input = {
-  height:48, border:`1px solid ${S.borde}`, borderRadius:8,
+  height:48, border:`1.5px solid ${S.borde}`, borderRadius:10,
   padding:"0 14px", fontSize:15, fontFamily:"inherit",
   background:S.blanco, color:S.gris1, width:"100%", boxSizing:"border-box"
 };
 
-const card = { background:S.blanco, border:`1px solid ${S.borde}`, borderRadius:12, padding:16 };
-const pageWrap = { maxWidth:720, margin:"0 auto", padding:"24px 16px 40px", width:"100%" };
+const card = { background:S.blanco, border:`1px solid ${S.bordeSutil}`, borderRadius:16, padding:18, boxShadow:S.sombra };
+const pageWrap = { maxWidth:720, margin:"0 auto", padding:"24px 16px 48px", width:"100%", animation:"gv-fade-in .35s ease" };
 
 function Spinner({ texto }) {
   return (
@@ -65,44 +72,50 @@ function Spinner({ texto }) {
 
 function TopNav({ title, showBack, onBack, role, onNav, navActive }) {
   return (
-    <div style={{ background:S.verde, color:"#fff", position:"sticky", top:0, zIndex:100 }}>
+    <div style={{ background:S.gradiente, color:"#fff", position:"sticky", top:0, zIndex:100,
+      boxShadow:"0 4px 16px rgba(15,92,44,0.18)" }}>
       <div style={{ maxWidth:720, margin:"0 auto", height:60, display:"flex",
         alignItems:"center", gap:12, padding:"0 16px" }}>
         {showBack ? (
-          <button onClick={onBack} style={{ background:"none", border:"none",
-            padding:0, cursor:"pointer", display:"flex", alignItems:"center", color:"#fff" }}>
-            <svg width={22} height={22} viewBox="0 0 24 24" fill="none">
-              <path d="M15.5 19L8.5 12L15.5 5" stroke="#fff" strokeWidth={2}
+          <button onClick={onBack} style={{ background:"rgba(255,255,255,0.14)", border:"none",
+            width:34, height:34, borderRadius:10, cursor:"pointer", display:"flex",
+            alignItems:"center", justifyContent:"center", color:"#fff", boxShadow:"none" }}>
+            <svg width={20} height={20} viewBox="0 0 24 24" fill="none">
+              <path d="M15.5 19L8.5 12L15.5 5" stroke="#fff" strokeWidth={2.2}
                 strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
         ) : (
-          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <div style={{ width:30, height:30, borderRadius:8,
-              background:"rgba(255,255,255,0.2)", display:"flex",
-              alignItems:"center", justifyContent:"center", fontSize:16 }}>🍇</div>
-            <span style={{ fontSize:16, fontWeight:700 }}>GrapeVision</span>
+          <div style={{ display:"flex", alignItems:"center", gap:9 }}>
+            <div style={{ width:32, height:32, borderRadius:10,
+              background:"rgba(255,255,255,0.18)", display:"flex",
+              alignItems:"center", justifyContent:"center", fontSize:17,
+              boxShadow:"inset 0 0 0 1px rgba(255,255,255,0.25)" }}>🍇</div>
+            <span style={{ fontSize:16, fontWeight:800, letterSpacing:0.2 }}>GrapeVision</span>
           </div>
         )}
-        <span style={{ flex:1, fontSize:17, fontWeight:600 }}>
+        <span style={{ flex:1, fontSize:16.5, fontWeight:700 }}>
           {showBack ? title : ""}
         </span>
         {role && !showBack && (
-          <div style={{ fontSize:12, background:"rgba(255,255,255,0.2)",
-            padding:"4px 10px", borderRadius:20, fontWeight:500 }}>
+          <div style={{ fontSize:11.5, background:"rgba(255,255,255,0.18)",
+            padding:"5px 11px", borderRadius:20, fontWeight:600, letterSpacing:0.2,
+            boxShadow:"inset 0 0 0 1px rgba(255,255,255,0.22)" }}>
             {role === "operario" ? "Operario" : "Supervisor"}
           </div>
         )}
       </div>
       {role && (
         <div style={{ maxWidth:720, margin:"0 auto", display:"flex",
-          borderTop:"1px solid rgba(255,255,255,0.15)" }}>
-          {[{key:"inicio",label:"Inicio"},{key:"historial",label:"Historial"},{key:"dashboard",label:"Dashboard"},{key:"perfil",label:"Perfil"}].map(t => (
+          borderTop:"1px solid rgba(255,255,255,0.14)" }}>
+          {[{key:"inicio",label:"Inicio",icon:"🏠"},{key:"historial",label:"Historial",icon:"🕘"},{key:"dashboard",label:"Dashboard",icon:"📊"},{key:"perfil",label:"Perfil",icon:"👤"}].map(t => (
             <button key={t.key} onClick={() => onNav(t.key)}
-              style={{ flex:1, height:44, background:"none", border:"none",
-                cursor:"pointer", fontSize:13, fontWeight:600,
-                color: navActive===t.key ? "#fff" : "rgba(255,255,255,0.6)",
+              style={{ flex:1, height:48, background:"none", border:"none", boxShadow:"none",
+                cursor:"pointer", fontSize:12.5, fontWeight:600, transition:"color .2s ease, border-color .2s ease",
+                display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:2,
+                color: navActive===t.key ? "#fff" : "rgba(255,255,255,0.62)",
                 borderBottom: navActive===t.key ? "3px solid #fff" : "3px solid transparent" }}>
+              <span style={{ fontSize:15, lineHeight:1 }}>{t.icon}</span>
               {t.label}
             </button>
           ))}
@@ -115,7 +128,7 @@ function TopNav({ title, showBack, onBack, role, onNav, navActive }) {
 function Label({ children, required }) {
   return (
     <label style={{ fontSize:13, fontWeight:500, color:S.gris1 }}>
-      {children}{required && <span style={{ color:"#D32F2F" }}> *</span>}
+      {children}{required && <span style={{ color:"#DC2626" }}> *</span>}
     </label>
   );
 }
@@ -143,35 +156,40 @@ function Login({ onLogin }) {
   };
 
   return (
-    <div style={{ ...pageWrap, maxWidth:420, display:"flex",
-      flexDirection:"column", alignItems:"center", gap:32, paddingTop:60 }}>
-      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>
-        <div style={{ width:72, height:72, borderRadius:18, background:S.verdeOsc,
-          display:"flex", alignItems:"center", justifyContent:"center", fontSize:32 }}>🍇</div>
-        <div style={{ fontSize:26, fontWeight:700, color:S.gris1 }}>GrapeVision</div>
-        <div style={{ fontSize:15, color:S.gris2 }}>Sistema de Clasificación de Uva</div>
-        <div style={{ fontSize:13, color:S.gris3 }}>AGROEXPORT S.A.</div>
-      </div>
-      <form onSubmit={handleSubmit} style={{ width:"100%", display:"flex", flexDirection:"column", gap:14 }}>
-        <div>
-          <Label>Usuario</Label>
-          <input value={username} onChange={e => setUsername(e.target.value)}
-            autoComplete="username" style={{ ...input, marginTop:6 }}/>
+    <div style={{ minHeight:"100vh", background:S.gradiente,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:"24px 16px" }}>
+      <div style={{ width:"100%", maxWidth:400, background:S.blanco, borderRadius:20,
+        boxShadow:S.sombraLg, padding:"36px 28px", display:"flex",
+        flexDirection:"column", alignItems:"center", gap:28, animation:"gv-fade-in .4s ease" }}>
+        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:10 }}>
+          <div style={{ width:68, height:68, borderRadius:18, background:S.gradiente,
+            display:"flex", alignItems:"center", justifyContent:"center", fontSize:30,
+            boxShadow:"0 6px 16px rgba(21,128,61,0.3)" }}>🍇</div>
+          <div style={{ fontSize:24, fontWeight:800, color:S.gris1, letterSpacing:0.2 }}>GrapeVision</div>
+          <div style={{ fontSize:14, color:S.gris2, textAlign:"center" }}>Sistema de Clasificación de Uva</div>
+          <div style={{ fontSize:12, color:S.gris3, fontWeight:600, letterSpacing:0.4, textTransform:"uppercase" }}>AGROEXPORT S.A.</div>
         </div>
-        <div>
-          <Label>Contraseña</Label>
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-            autoComplete="current-password" style={{ ...input, marginTop:6 }}/>
-        </div>
-        {error && (
-          <div style={{ background:"#FFEBEE", borderRadius:8, padding:"10px 12px", fontSize:13, color:"#C62828" }}>
-            {error}
+        <form onSubmit={handleSubmit} style={{ width:"100%", display:"flex", flexDirection:"column", gap:14 }}>
+          <div>
+            <Label>Usuario</Label>
+            <input value={username} onChange={e => setUsername(e.target.value)}
+              autoComplete="username" style={{ ...input, marginTop:6 }}/>
           </div>
-        )}
-        <button type="submit" disabled={loading || !username || !password} style={btn()}>
-          {loading ? "Ingresando..." : "Ingresar"}
-        </button>
-      </form>
+          <div>
+            <Label>Contraseña</Label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)}
+              autoComplete="current-password" style={{ ...input, marginTop:6 }}/>
+          </div>
+          {error && (
+            <div style={{ background:S.rojoBg, borderRadius:8, padding:"10px 12px", fontSize:13, color:S.rojoTxt }}>
+              {error}
+            </div>
+          )}
+          <button type="submit" disabled={loading || !username || !password} style={{ ...btn(), marginTop:4 }}>
+            {loading ? "Ingresando..." : "Ingresar"}
+          </button>
+        </form>
+      </div>
     </div>
   );
 }
@@ -412,7 +430,7 @@ function CapturaImagen({ loteInicial, onEnviar, onNuevoLote }) {
           </div>
         )}
         {error && (
-          <div style={{ background:"#FFEBEE", borderRadius:8, padding:"10px 14px", color:"#C62828", fontSize:13, fontWeight:500 }}>
+          <div style={{ background:S.rojoBg, borderRadius:8, padding:"10px 14px", color:S.rojoTxt, fontSize:13, fontWeight:500 }}>
             ⚠ {error}
           </div>
         )}
@@ -599,7 +617,7 @@ function Historial({ rows }) {
             <span>Lote</span><span>Categoría</span><span>Conf.</span><span>Fecha</span>
           </div>
           {filasFiltradas.map((r,i) => (
-            <div key={i} onClick={() => setSelected(i)}
+            <div key={i} onClick={() => setSelected(i)} className="gv-row-flat"
               style={{ display:"grid", gridTemplateColumns:"1fr 1fr .8fr 1fr",
                 padding:"12px 16px", borderBottom:`1px solid ${S.borde}`,
                 background: i===selected ? "#F5FAF7" : S.blanco,
@@ -642,10 +660,10 @@ function Historial({ rows }) {
 const ESTADO_INFO = {
   pendiente:    { label:"Pendiente",    bg:S.ambar,      color:S.ambarTxt },
   coincidencia: { label:"Coincidencia", bg:S.verdeBadge, color:S.verdeOsc },
-  discrepancia: { label:"Discrepancia", bg:"#FFEBEE",    color:"#C62828" },
+  discrepancia: { label:"Discrepancia", bg:S.rojoBg,    color:S.rojoTxt },
 };
 
-function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión de Clasificaciones", auth }) {
+function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión de Clasificaciones", auth, permitirExportar = false }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [estado, setEstado] = useState(estadoInicial);
@@ -657,6 +675,12 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
   const [observacion, setObservacion] = useState("");
   const [guardando, setGuardando] = useState(false);
   const [exportando, setExportando] = useState(false);
+  const [lotesDisponibles, setLotesDisponibles] = useState([]);
+
+  useEffect(() => {
+    fetch(`${API}/lotes`).then(r => r.json()).then(data => setLotesDisponibles(Array.isArray(data) ? data : [])).catch(() => {});
+  }, []);
+  const campanasDisponibles = [...new Set(lotesDisponibles.map(l => l.campana).filter(Boolean))];
 
   const filtrosActuales = () => {
     const params = new URLSearchParams({ estado });
@@ -703,7 +727,7 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url; a.download = "clasificaciones.csv";
+      a.href = url; a.download = "clasificaciones.xlsx";
       document.body.appendChild(a); a.click(); a.remove();
       URL.revokeObjectURL(url);
     } finally { setExportando(false); }
@@ -755,7 +779,7 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
             <button disabled={guardando} onClick={() => handleValidar(true)}
               style={btn({ background:S.verdeOsc, flex:1 })}>✓ Coincide</button>
             <button disabled={guardando} onClick={() => handleValidar(false)}
-              style={btn({ background:"#C62828", flex:1 })}>✗ Discrepancia</button>
+              style={btn({ background:S.rojoTxt, flex:1 })}>✗ Discrepancia</button>
           </div>
           <button onClick={cerrar} style={{ ...btn({ background:S.blanco, color:S.gris2 }), border:`1px solid ${S.borde}` }}>
             Cancelar
@@ -778,10 +802,18 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
             <option value="coincidencia">Coincidencia</option>
             <option value="discrepancia">Discrepancia</option>
           </select>
-          <input placeholder="Filtrar por lote..." value={lote} onChange={e => setLote(e.target.value)}
-            style={{ ...input, height:40, width:140 }}/>
-          <input placeholder="Campaña..." value={campana} onChange={e => setCampana(e.target.value)}
-            style={{ ...input, height:40, width:110 }}/>
+          <select value={lote} onChange={e => setLote(e.target.value)}
+            style={{ height:40, border:`1px solid ${S.borde}`, borderRadius:8,
+              background:S.blanco, padding:"0 10px", fontSize:13, color:S.gris2, appearance:"none", width:160 }}>
+            <option value="">Todos los lotes</option>
+            {lotesDisponibles.map(l => <option key={l.id} value={l.lote_id}>{l.lote_id} · {l.fundo}</option>)}
+          </select>
+          <select value={campana} onChange={e => setCampana(e.target.value)}
+            style={{ height:40, border:`1px solid ${S.borde}`, borderRadius:8,
+              background:S.blanco, padding:"0 10px", fontSize:13, color:S.gris2, appearance:"none", width:130 }}>
+            <option value="">Todas las campañas</option>
+            {campanasDisponibles.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
           <input type="date" value={fechaDesde} onChange={e => setFechaDesde(e.target.value)}
             style={{ ...input, height:40, width:150 }}/>
           <input type="date" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)}
@@ -790,10 +822,12 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
             background:S.verdeOsc, color:"#fff", fontWeight:600, fontSize:13, cursor:"pointer" }}>
             Filtrar
           </button>
-          <button onClick={handleExportar} disabled={exportando} style={{ height:40, padding:"0 16px", borderRadius:8,
-            border:`1px solid ${S.verdeOsc}`, background:S.blanco, color:S.verdeOsc, fontWeight:600, fontSize:13, cursor:"pointer" }}>
-            {exportando ? "Exportando..." : "⬇ Exportar CSV"}
-          </button>
+          {permitirExportar && (
+            <button onClick={handleExportar} disabled={exportando} style={{ height:40, padding:"0 16px", borderRadius:8,
+              border:`1px solid ${S.verdeOsc}`, background:S.blanco, color:S.verdeOsc, fontWeight:600, fontSize:13, cursor:"pointer" }}>
+              {exportando ? "Exportando..." : "⬇ Exportar Excel"}
+            </button>
+          )}
         </div>
         {loading ? (
           <div style={{ textAlign:"center", padding:60, color:S.gris3 }}>Cargando...</div>
@@ -806,9 +840,9 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
             {rows.map(r => {
               const e = ESTADO_INFO[r.estado];
               return (
-                <div key={r.id} onClick={() => abrir(r)}
+                <div key={r.id} onClick={() => abrir(r)} className="gv-row-card"
                   style={{ ...card, display:"flex", alignItems:"center", gap:12, cursor:"pointer" }}>
-                  <div style={{ width:48, height:48, borderRadius:8, background:"#f0f0f0", flexShrink:0,
+                  <div style={{ width:48, height:48, borderRadius:10, background:"#F1F5F3", flexShrink:0,
                     display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden" }}>
                     {r.imagen_url ? <img src={r.imagen_url} alt="" style={{ width:"100%", height:"100%", objectFit:"cover" }}/> : "🍇"}
                   </div>
@@ -917,6 +951,12 @@ function DashboardSupervisor() {
   const [lote, setLote] = useState("");
   const [fechaDesde, setFechaDesde] = useState("");
   const [fechaHasta, setFechaHasta] = useState("");
+  const [lotesDisponibles, setLotesDisponibles] = useState([]);
+
+  useEffect(() => {
+    fetch(`${API}/lotes`).then(r => r.json()).then(data => setLotesDisponibles(Array.isArray(data) ? data : [])).catch(() => {});
+  }, []);
+  const campanasDisponibles = [...new Set(lotesDisponibles.map(l => l.campana).filter(Boolean))];
 
   const cargar = () => {
     const params = new URLSearchParams();
@@ -947,10 +987,18 @@ function DashboardSupervisor() {
       <h2 style={{ margin:"0 0 20px", fontSize:20, fontWeight:700, color:S.gris1 }}>Dashboard de Precisión</h2>
       <div style={{ display:"flex", flexDirection:"column", gap:16 }}>
         <div style={{ display:"flex", gap:8, flexWrap:"wrap" }}>
-          <input placeholder="Campaña..." value={campana} onChange={e => setCampana(e.target.value)}
-            style={{ ...input, height:40, width:110 }}/>
-          <input placeholder="Lote..." value={lote} onChange={e => setLote(e.target.value)}
-            style={{ ...input, height:40, width:130 }}/>
+          <select value={campana} onChange={e => setCampana(e.target.value)}
+            style={{ height:40, border:`1px solid ${S.borde}`, borderRadius:8,
+              background:S.blanco, padding:"0 10px", fontSize:13, color:S.gris2, appearance:"none", width:130 }}>
+            <option value="">Todas las campañas</option>
+            {campanasDisponibles.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={lote} onChange={e => setLote(e.target.value)}
+            style={{ height:40, border:`1px solid ${S.borde}`, borderRadius:8,
+              background:S.blanco, padding:"0 10px", fontSize:13, color:S.gris2, appearance:"none", width:160 }}>
+            <option value="">Todos los lotes</option>
+            {lotesDisponibles.map(l => <option key={l.id} value={l.lote_id}>{l.lote_id} · {l.fundo}</option>)}
+          </select>
           <input type="date" value={fechaDesde} onChange={e => setFechaDesde(e.target.value)}
             style={{ ...input, height:40, width:150 }}/>
           <input type="date" value={fechaHasta} onChange={e => setFechaHasta(e.target.value)}
@@ -1044,7 +1092,7 @@ const ESTADO_MODELO_INFO = {
 };
 const VEREDICTO_INFO = {
   mejora:    { label:"Mejora",    color:S.verdeOsc },
-  "regresión": { label:"Regresión", color:"#C62828" },
+  "regresión": { label:"Regresión", color:S.rojoTxt },
   igual:     { label:"Igual",     color:S.gris2 },
   sin_base:  { label:"Sin base",  color:S.gris3 },
 };
@@ -1167,7 +1215,7 @@ function VersionesModelo({ auth }) {
             <input value={form.notas} onChange={e => upd("notas", e.target.value)}
               style={{ ...input, marginTop:6 }}/>
           </div>
-          {error && <div style={{ fontSize:12, color:"#C62828" }}>{error}</div>}
+          {error && <div style={{ fontSize:12, color:S.rojoTxt }}>{error}</div>}
           <button type="submit" disabled={guardando} style={btn()}>
             {guardando ? "Registrando..." : "Registrar candidata"}
           </button>
@@ -1273,7 +1321,7 @@ export default function App() {
   };
 
   return (
-    <div style={{ minHeight:"100vh", background:S.fondoApp, fontFamily:"Roboto, system-ui, sans-serif" }}>
+    <div style={{ minHeight:"100vh", background:S.fondoApp, fontFamily:"Inter, system-ui, sans-serif" }}>
       {screen !== "roleSelect" && (
         <TopNav title={HEADERS[screen]||""} showBack={showBack} onBack={goBack}
           role={role} onNav={onNav} navActive={navActive}/>
@@ -1298,7 +1346,7 @@ export default function App() {
         )}
         {screen === "historial" && <Historial rows={historial}/>}
         {screen === "historialSupervisor" && (
-          <RevisionClasificaciones estadoInicial="todas" titulo="Historial de Validaciones" auth={auth}/>
+          <RevisionClasificaciones estadoInicial="todas" titulo="Historial de Validaciones" auth={auth} permitirExportar/>
         )}
         {screen === "dashboard" && (
           role === "supervisor" ? <DashboardSupervisor/> : <DashboardOperario/>

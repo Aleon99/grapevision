@@ -2,10 +2,12 @@ from fastapi import FastAPI, File, UploadFile, HTTPException, Header, Depends, R
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional
-import io, json, random, os, base64, uuid, csv
+import io, json, random, os, base64, uuid
 from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 import jwt, bcrypt
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 load_dotenv()
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-only-secret-not-for-production")
@@ -649,8 +651,8 @@ def stats_validaciones_avanzado(campana:str="", lote_id:str="", fecha_desde:str=
             "filtros":{"campana":campana,"lote_id":lote_id,"fecha_desde":fecha_desde,"fecha_hasta":fecha_hasta}}
 
 # ── EXPORTACIÓN (HU012) ─────────────────────────────────────────────────────────
-def _csv_seguro(valor):
-    """Antepone un apóstrofo a cualquier valor que empiece como fórmula (=, +, -, @) para evitar CSV injection."""
+def _texto_seguro(valor):
+    """Antepone un apóstrofo a cualquier texto que empiece como fórmula (=, +, -, @) para evitar inyección de fórmulas en Excel."""
     s = "" if valor is None else str(valor)
     if s and s[0] in ("=", "+", "-", "@"):
         return "'" + s
@@ -659,7 +661,7 @@ def _csv_seguro(valor):
 @app.get("/clasificaciones/exportar")
 def exportar_clasificaciones(estado:str="todas", fecha_desde:str="", fecha_hasta:str="",
     lote_id:str="", campana:str="", current_user: dict = Depends(require_role("supervisor"))):
-    """HU012: exporta a CSV las clasificaciones filtradas por periodo/campaña/lote, restringido a supervisores."""
+    """HU012: exporta a Excel las clasificaciones filtradas por periodo/campaña/lote, restringido a supervisores."""
     condiciones = ["c.perfil = 'operario'"]
     params = []
     if fecha_desde:
@@ -691,17 +693,27 @@ def exportar_clasificaciones(estado:str="todas", fecha_desde:str="", fecha_hasta
     """, params)
     rows = cur.fetchall(); cur.close(); conn.close()
 
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["id","lote_id","campana","variedad","categoria","confianza","fecha_inspeccion","estado","created_at"])
+    headers = ["id","lote_id","campana","variedad","categoria","confianza","fecha_inspeccion","estado","created_at"]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Clasificaciones"
+    ws.append(headers)
     for r in rows:
         estado_fila = "pendiente" if r["validacion_id"] is None else ("coincidencia" if r["es_correcta"] else "discrepancia")
-        writer.writerow([_csv_seguro(r["id"]), _csv_seguro(r["lote_id"]), _csv_seguro(r["campana"]),
-            _csv_seguro(r["variedad"]), _csv_seguro(r["categoria"]), _csv_seguro(r["confianza"]),
-            _csv_seguro(r["fecha_inspeccion"]), _csv_seguro(estado_fila), _csv_seguro(r["created_at"])])
+        ws.append([
+            r["id"], _texto_seguro(r["lote_id"]), _texto_seguro(r["campana"]),
+            _texto_seguro(r["variedad"]), _texto_seguro(r["categoria"]), r["confianza"],
+            _texto_seguro(r["fecha_inspeccion"]), _texto_seguro(estado_fila), _texto_seguro(r["created_at"]),
+        ])
+    for i, h in enumerate(headers, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = max(12, len(h) + 2)
 
-    return Response(content=buf.getvalue(), media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=clasificaciones.csv"})
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return Response(content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=clasificaciones.xlsx"})
 
 # ── VERSIONES DEL MODELO (HU016) ────────────────────────────────────────────────
 @app.post("/modelo/versiones", status_code=201)

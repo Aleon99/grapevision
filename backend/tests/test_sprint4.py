@@ -10,7 +10,10 @@ Un test por historia de usuario (o por sub-comportamiento relevante de esa
 historia), como evidencia de trazabilidad Sprint -> HU -> código.
 """
 
+import io
+
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 
 import main
 from helpers import mock_db_sequence
@@ -48,7 +51,7 @@ def test_hu011_dashboard_avanzado_sin_comparaciones_no_muestra_porcentaje_engano
 
 
 def test_hu012_exportar_respeta_los_filtros_activos_y_escapa_celdas_tipo_formula(monkeypatch):
-    """HU012: el CSV exportado contiene solo lo filtrado, y una celda que empieza como fórmula queda escapada de forma segura."""
+    """HU012: el Excel exportado contiene solo lo filtrado, y una celda que empieza como fórmula queda escapada de forma segura."""
     mock_db_sequence(monkeypatch, main, fetchall_return=[{
         "id": 1, "lote_id": "=cmd|' /C calc'!A0", "campana": "2026", "variedad": "Timpson",
         "categoria": "Categoría 1", "confianza": 0.95, "fecha_inspeccion": "2026-10-05",
@@ -56,20 +59,23 @@ def test_hu012_exportar_respeta_los_filtros_activos_y_escapa_celdas_tipo_formula
     }])
     resp = client.get("/clasificaciones/exportar?lote_id=L-2026-001&campana=2026")
     assert resp.status_code == 200
-    assert resp.headers["content-type"].startswith("text/csv")
-    cuerpo = resp.text
-    assert "'=cmd|' /C calc'!A0" in cuerpo
-    assert "coincidencia" in cuerpo
+    assert resp.headers["content-type"] == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    wb = load_workbook(io.BytesIO(resp.content))
+    filas = list(wb.active.iter_rows(values_only=True))
+    assert filas[1][1] == "'=cmd|' /C calc'!A0"
+    assert "coincidencia" in filas[1]
 
 
 def test_hu012_exportar_sin_resultados_devuelve_solo_encabezados(monkeypatch):
-    """HU012: un filtro sin coincidencias igual devuelve un CSV válido, con encabezados y sin filas ajenas."""
+    """HU012: un filtro sin coincidencias igual devuelve un Excel válido, con encabezados y sin filas ajenas."""
     mock_db_sequence(monkeypatch, main, fetchall_return=[])
     resp = client.get("/clasificaciones/exportar?lote_id=L-9999-999")
     assert resp.status_code == 200
-    lineas = resp.text.strip().splitlines()
-    assert len(lineas) == 1
-    assert lineas[0].startswith("id,lote_id,campana")
+    wb = load_workbook(io.BytesIO(resp.content))
+    filas = list(wb.active.iter_rows(values_only=True))
+    assert len(filas) == 1
+    assert filas[0][:2] == ("id", "lote_id")
 
 
 def test_hu012_un_usuario_sin_rol_supervisor_no_puede_exportar_y_el_intento_queda_registrado(monkeypatch):
