@@ -254,17 +254,35 @@ def validar_imagen(contents: bytes, content_type: str):
         except Exception:
             raise HTTPException(400, "El archivo no es una imagen válida o está corrupto.")
 
+def _comprimir_para_subida(image_bytes: bytes, content_type: str, max_lado: int = 1600) -> tuple:
+    """Reescala a un lado máximo razonable para web/móvil y recomprime a JPEG.
+    Las fotos de cámara (varios MB, miles de px) se usaban tal cual como miniatura de
+    48x48 en la Cola de Revisión, lo que saturaba las conexiones del navegador y dejaba
+    varias filas "pendiente" hasta que el resto de descargas liberaba ancho de banda."""
+    if not PIL_AVAILABLE:
+        return image_bytes, content_type
+    try:
+        img = ImageOps.exif_transpose(Image.open(io.BytesIO(image_bytes))).convert("RGB")
+        if max(img.size) > max_lado:
+            img.thumbnail((max_lado, max_lado), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+        return buf.getvalue(), "image/jpeg"
+    except Exception:
+        return image_bytes, content_type
+
 # ── ALMACENAMIENTO DE IMÁGENES (Cloud Storage) ─────────────────────────────────
 def subir_imagen(image_bytes: bytes, content_type: str) -> str:
-    """Sube la imagen original a Cloud Storage y devuelve su URL pública. Devuelve "" si Storage no está disponible o falla la subida."""
+    """Sube la imagen (recomprimida a un tamaño razonable) a Cloud Storage y devuelve su URL pública. Devuelve "" si Storage no está disponible o falla la subida."""
     if not GCS_AVAILABLE:
         return ""
     try:
+        contenido, content_type = _comprimir_para_subida(image_bytes, content_type)
         ext = "png" if content_type == "image/png" else "jpg"
         nombre = f"clasificaciones/{datetime.now(timezone.utc):%Y/%m}/{uuid.uuid4().hex}.{ext}"
         bucket = gcs_client.bucket(GCS_BUCKET)
         blob = bucket.blob(nombre)
-        blob.upload_from_string(image_bytes, content_type=content_type)
+        blob.upload_from_string(contenido, content_type=content_type)
         return f"https://storage.googleapis.com/{GCS_BUCKET}/{nombre}"
     except Exception as e:
         print(f"⚠️  Error subiendo imagen a Cloud Storage: {e}")

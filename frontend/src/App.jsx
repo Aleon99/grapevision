@@ -844,7 +844,7 @@ function RevisionClasificaciones({ estadoInicial = "todas", titulo = "Revisión 
                   style={{ ...card, display:"flex", alignItems:"center", gap:12, cursor:"pointer" }}>
                   <div style={{ width:48, height:48, borderRadius:10, background:"#F1F5F3", flexShrink:0,
                     display:"flex", alignItems:"center", justifyContent:"center", overflow:"hidden" }}>
-                    {r.imagen_url ? <img src={r.imagen_url} alt="" style={{ width:"100%", height:"100%", objectFit:"cover" }}/> : "🍇"}
+                    {r.imagen_url ? <img src={r.imagen_url} alt="" loading="lazy" decoding="async" style={{ width:"100%", height:"100%", objectFit:"cover" }}/> : "🍇"}
                   </div>
                   <div style={{ flex:1, minWidth:0 }}>
                     <div style={{ fontSize:13, fontWeight:600, color:S.gris1 }}>{r.lote_id} · {r.categoria}</div>
